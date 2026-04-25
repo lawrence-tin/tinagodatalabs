@@ -1,109 +1,157 @@
-🧱 TARGET SAAS ARCHITECTURE (Clean)
-CLIENT
-   ↓
-PLATFORM (YouTube / TikTok / IG / FB)
-   ↓
-MODEL
-   ↓
-PREDICTION
-🚀 STEP 3 (CORRECT VERSION)
+We’re going to build the Auto Optimize Engine properly, not just hack something together.
 
-We do Model per Client + Platform
+🚀 STEP 4 — Auto Optimize Engine
+🎯 Goal
 
-NOT just “model per client”
+User clicks:
 
-✅ STEP 3.1 — Snowflake Model Storage Strategy
+"Auto Optimize"
 
-Instead of one model:
+And your system returns:
 
-engagement_model.joblib.gz
+Best duration
+Best publish time
+Best title features
+Top 3 performing scenarios
+⚠️ Key Principle
 
-You move to:
+We are NOT training a new model.
 
-models/
-├── team5pm_youtube.joblib.gz
-├── team5pm_tiktok.joblib.gz
-├── nike_instagram.joblib.gz
+We are:
 
-👉 Naming convention is critical:
+👉 Using your existing model to simulate many combinations
 
-{client_id}_{platform}.joblib.gz
-✅ STEP 3.2 — Update model loader (IMPORTANT)
+This is what makes it scalable.
+
+🧱 STEP 4.1 — Where this logic lives
+
+Create a new file:
+
+utils/optimizer.py
+✍️ STEP 4.2 — Add this code
+import pandas as pd
+import numpy as np
+
+def generate_scenarios(df_silver):
+    """
+    Generate combinations of inputs to test
+    """
+
+    durations = [240, 360, 480, 600, 900]  # seconds
+    hours = list(range(0, 24, 2))
+
+    scenarios = []
+
+    for d in durations:
+        for h in hours:
+            for money in [0, 1]:
+                for question in [0, 1]:
+                    for numbers in [0, 1]:
+
+                        scenarios.append({
+                            "duration_seconds": d,
+                            "publish_hour_utc": h,
+                            "has_money_symbol": money,
+                            "has_question_mark": question,
+                            "has_numbers": numbers
+                        })
+
+    return pd.DataFrame(scenarios)
+
+
+def build_feature_frame(scenarios, df_silver):
+    """
+    Add required model features (fallbacks)
+    """
+
+    avg_views = float(df_silver['raw_views'].mean())
+    avg_engagement = float(df_silver['engagement_rate_pct'].mean())
+    avg_duration = float(df_silver['duration_seconds'].mean())
+
+    scenarios["title_length"] = 10
+    scenarios["is_weekend"] = 0
+
+    scenarios["rolling_avg_views_5"] = avg_views
+    scenarios["rolling_avg_engagement_5"] = avg_engagement
+    scenarios["rolling_avg_duration_5"] = avg_duration
+
+    scenarios["prev_video_views"] = avg_views
+    scenarios["prev_video_engagement"] = avg_engagement
+    scenarios["prev_video_has_money"] = scenarios["has_money_symbol"]
+
+    return scenarios
+
+
+def run_optimization(model, df_silver):
+    """
+    Main optimizer function
+    """
+
+    scenarios = generate_scenarios(df_silver)
+    features = build_feature_frame(scenarios.copy(), df_silver)
+
+    predictions = model.predict(features)
+
+    scenarios["predicted_engagement"] = predictions
+
+    # Sort best first
+    scenarios = scenarios.sort_values("predicted_engagement", ascending=False)
+
+    return scenarios.head(10)
+🧱 STEP 4.3 — Plug into Streamlit
 
 Go to:
 
-core/model_loader.py
-🔁 Replace with:
-import joblib
-import os
+streamlit_app.py
+🔁 Import it
+from utils.optimizer import run_optimization
+🔁 Add button under Predict section
+if st.button("⚡ Auto Optimize", use_container_width=True):
 
-def load_model(client_id: str, platform: str):
-    model_name = f"{client_id}_{platform}.joblib.gz"
-    model_path = os.path.join("models", model_name)
+    results = run_optimization(model, df_silver)
 
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model not found: {model_name}")
+    st.success("Top Optimized Scenarios")
 
-    return joblib.load(model_path)
-✅ STEP 3.3 — Update Streamlit app
-🔁 Add platform selector
+    st.dataframe(results.head(5), use_container_width=True)
+🧱 STEP 4.4 — Make it look like a PRODUCT
 
-In sidebar:
+Replace the raw table with:
 
-platform = st.sidebar.selectbox(
-    "Platform",
-    ["youtube", "tiktok", "instagram", "facebook"]
-)
-🔁 Load model dynamically
-@st.cache_resource
-def get_model(client_id, platform):
-    from core.model_loader import load_model
-    return load_model(client_id, platform)
+top3 = results.head(3)
 
-model = get_model(client_id, platform)
-✅ STEP 3.4 — Data isolation per platform
+for i, row in top3.iterrows():
+    st.markdown(f"### 🏆 Option {i+1}")
 
-Update your data loader:
+    col1, col2, col3 = st.columns(3)
 
-def load_silver_data(conn, client_id=None, platform=None):
+    col1.metric("Duration", f"{int(row['duration_seconds']/60)} min")
+    col2.metric("Publish Hour", f"{int(row['publish_hour_utc'])}:00")
+    col3.metric("Engagement", f"{row['predicted_engagement']:.2f}%")
 
-    query = """
-        SELECT *
-        FROM TEAM5PM_PROTOTYPE.SILVER.CANONICAL_PERFORMANCE
-        WHERE 1=1
-    """
+    st.markdown(
+        f"""
+        💡 Includes:
+        {'💰' if row['has_money_symbol'] else ''}
+        {'❓' if row['has_question_mark'] else ''}
+        {'🔢' if row['has_numbers'] else ''}
+        """
+    )
+🧠 What you just built
 
-    if client_id:
-        query += f" AND CLIENT_ID = '{client_id}'"
+This is actually:
 
-    if platform:
-        query += f" AND PLATFORM = '{platform}'"
+👉 A brute-force optimization engine
 
-    df = pd.read_sql(query, conn)
+And it works because:
 
-    df.columns = df.columns.str.lower()
+Your feature space is small
+Model inference is fast
+🔥 Why this is powerful
 
-    return df
+This turns your app from:
 
-Then in Streamlit:
+❌ “Predictor”
 
-df_silver = load_data(client_id, platform)
-⚠️ IMPORTANT (Don’t skip this)
+Into:
 
-You MUST add this column in Snowflake:
-
-ALTER TABLE TEAM5PM_PROTOTYPE.SILVER.CANONICAL_PERFORMANCE
-ADD COLUMN PLATFORM STRING;
-
-Populate:
-
-UPDATE TEAM5PM_PROTOTYPE.SILVER.CANONICAL_PERFORMANCE
-SET PLATFORM = 'youtube';
-🧠 Why this matters
-
-Now your system supports:
-
-Client	Platform	Model
-team5pm	YouTube	✔
-team5pm	TikTok	✔
-nike	Instagram	✔
+✅ Decision engine
