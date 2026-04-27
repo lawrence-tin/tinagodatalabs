@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from utils.data_loader import get_connection, load_silver_data
 from utils.features import build_input
 from core.model_loader import load_model
-from utils.optimizer import auto_optimize, top_scenarios
+from utils.optimizer import run_optimization
 
 
 # ---------------------------
@@ -41,12 +41,12 @@ def load_data(client_id, platform):
 # ---------------------------
 client_id = st.sidebar.selectbox(
     "Client",
-    ["team5pm", "client_a", "client_b"]
+    ["All", "team5pm", "mrbeast", "client_a", "client_b"]
 )
 
 platform = st.sidebar.selectbox(
     "Platform",
-    ["youtube", "tiktok", "instagram", "facebook"]
+    ["All", "youtube", "tiktok", "instagram", "facebook"]
 )
 
 df_silver = load_data(client_id, platform)
@@ -71,11 +71,31 @@ if page == "🏠 Overview":
 
     st.markdown("## 📊 Channel Snapshot")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("Videos Analyzed", len(df_silver))
-    col2.metric("Avg Engagement", f"{df_silver['engagement_rate_pct'].mean():.2f}%")
+    
+    historical_avg_engagement = df_silver['engagement_rate_pct'].mean()
+    col2.metric("Avg Engagement", f"{historical_avg_engagement:.2f}%")
+    
     col3.metric("Best Video", f"{df_silver['engagement_rate_pct'].max():.2f}%")
+
+    # Channel Health Metric (Last 5 videos vs Historical Average)
+    if len(df_silver) >= 5:
+        last_5_videos = df_silver.sort_values(by='published_at', ascending=False).head(5)
+        last_5_avg_engagement = last_5_videos['engagement_rate_pct'].mean()
+        
+        if historical_avg_engagement != 0:
+            channel_health_delta = ((last_5_avg_engagement - historical_avg_engagement) / historical_avg_engagement) * 100
+            col4.metric(
+                "Channel Health (Last 5 vs Avg)", 
+                f"{last_5_avg_engagement:.2f}%", 
+                f"{channel_health_delta:+.1f}% vs Avg"
+            )
+        else:
+            col4.metric("Channel Health (Last 5 vs Avg)", f"{last_5_avg_engagement:.2f}%", "N/A (No historical avg)")
+    else:
+        col4.metric("Channel Health (Last 5 vs Avg)", "N/A", "Not enough data")
 
     st.markdown("---")
     st.info("Use the Predict tab to test new video ideas before publishing.")
@@ -142,24 +162,27 @@ elif page == "🎬 Predict":
     st.markdown("---")
     st.subheader("⚡ Optimization Engine")
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("⚡ Auto Optimize", use_container_width=True):
-
-            score, config = auto_optimize(model, df_silver)
-
-            st.success(f"Best Possible Engagement: {score:.2f}%")
-            st.json(config)
-
-    with col2:
-        if st.button("🏆 Top 3 Scenarios", use_container_width=True):
-
-            scenarios = top_scenarios(model, df_silver)
-
-            for i, s in enumerate(scenarios, 1):
-                st.markdown(f"### #{i}")
-                st.write(s)
+    if st.button("⚡ Run Auto-Optimization", use_container_width=True):
+        results = run_optimization(model, df_silver)
+        
+        st.success("Top 3 Optimized Scenarios Found")
+        
+        top3 = results.head(3)
+        for i, (idx, row) in enumerate(top3.iterrows()):
+            st.markdown(f"#### 🏆 Option {i+1}")
+            c1, c2, c3 = st.columns(3)
+            
+            c1.metric("Duration", f"{int(row['duration_seconds']/60)} min")
+            c2.metric("Best Time", f"{int(row['publish_hour_utc'])}:00 UTC")
+            c3.metric("Engagement", f"{row['predicted_engagement']:.2f}%")
+            
+            features = []
+            if row['has_money_symbol']: features.append("💰 Money Symbol")
+            if row['has_question_mark']: features.append("❓ Question Mark")
+            if row['has_numbers']: features.append("🔢 Numbers")
+            
+            st.caption(f"Strategy: {' • '.join(features) if features else 'Standard Title'}")
+            st.markdown("---")
 
     # ---------------------------
     # BULK CSV RANKING

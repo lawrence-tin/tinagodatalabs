@@ -1,86 +1,62 @@
 import pandas as pd
+import numpy as np
+from itertools import product
 
-def auto_optimize(model, df):
-    best_score = -1
-    best_config = None
+def generate_scenarios():
+    """
+    Generate all possible combinations of categorical/discrete inputs.
+    """
+    durations = [240, 360, 480, 600, 900, 1200]
+    hours = list(range(0, 24, 2))  # Every 2 hours
+    money_flags = [0, 1]
+    question_flags = [0, 1]
+    number_flags = [0, 1]
 
-    avg_views = df['raw_views'].mean()
-    avg_engagement = df['engagement_rate_pct'].mean()
-    avg_duration = df['duration_seconds'].mean()
+    combos = list(product(durations, hours, money_flags, question_flags, number_flags))
+    
+    return pd.DataFrame(combos, columns=[
+        "duration_seconds", 
+        "publish_hour_utc", 
+        "has_money_symbol", 
+        "has_question_mark", 
+        "has_numbers"
+    ])
 
-    for duration in [300, 480, 600, 900]:
-        for hour in range(12, 22):
-            for money in [0, 1]:
-                for question in [0, 1]:
-                    for numbers in [0, 1]:
+def build_feature_frame(scenarios, df_silver):
+    """
+    Prepares the full feature set required by the model using silver data averages.
+    """
+    # Use historical averages as the 'baseline' state for the simulation
+    avg_views = float(df_silver['raw_views'].mean()) if 'raw_views' in df_silver.columns else 0
+    avg_engagement = float(df_silver['engagement_rate_pct'].mean())
+    avg_duration = float(df_silver['duration_seconds'].mean())
 
-                        input_data = pd.DataFrame([{
-                            "duration_seconds": duration,
-                            "title_length": 10,
-                            "has_money_symbol": money,
-                            "has_question_mark": question,
-                            "has_numbers": numbers,
-                            "publish_hour_utc": hour,
-                            "is_weekend": 0,
+    # Static/Inferred features
+    scenarios["title_length"] = 10
+    scenarios["is_weekend"] = 0
+    
+    # History-based features (Contextual scaling)
+    scenarios["rolling_avg_views_5"] = avg_views
+    scenarios["rolling_avg_engagement_5"] = avg_engagement
+    scenarios["rolling_avg_duration_5"] = avg_duration
+    scenarios["prev_video_views"] = avg_views
+    scenarios["prev_video_engagement"] = avg_engagement
+    scenarios["prev_video_has_money"] = scenarios["has_money_symbol"]
 
-                            "rolling_avg_views_5": avg_views,
-                            "rolling_avg_engagement_5": avg_engagement,
-                            "rolling_avg_duration_5": avg_duration,
-                            "prev_video_views": avg_views,
-                            "prev_video_engagement": avg_engagement,
-                            "prev_video_has_money": money
-                        }])
+    return scenarios
 
-                        score = float(model.predict(input_data)[0])
-
-                        if score > best_score:
-                            best_score = score
-                            best_config = {
-                                "duration": duration,
-                                "hour": hour,
-                                "money": money,
-                                "question": question,
-                                "numbers": numbers
-                            }
-
-    return best_score, best_config
-
-
-def top_scenarios(model, df, top_n=3):
-    results = []
-
-    avg_views = df['raw_views'].mean()
-    avg_engagement = df['engagement_rate_pct'].mean()
-    avg_duration = df['duration_seconds'].mean()
-
-    for duration in [300, 480, 600, 900]:
-        for hour in range(12, 22):
-            for money in [0, 1]:
-
-                input_data = pd.DataFrame([{
-                    "duration_seconds": duration,
-                    "title_length": 10,
-                    "has_money_symbol": money,
-                    "has_question_mark": 0,
-                    "has_numbers": 0,
-                    "publish_hour_utc": hour,
-                    "is_weekend": 0,
-
-                    "rolling_avg_views_5": avg_views,
-                    "rolling_avg_engagement_5": avg_engagement,
-                    "rolling_avg_duration_5": avg_duration,
-                    "prev_video_views": avg_views,
-                    "prev_video_engagement": avg_engagement,
-                    "prev_video_has_money": money
-                }])
-
-                score = float(model.predict(input_data)[0])
-
-                results.append({
-                    "score": score,
-                    "duration": duration,
-                    "hour": hour,
-                    "money": money
-                })
-
-    return sorted(results, key=lambda x: x["score"], reverse=True)[:top_n]
+def run_optimization(model, df_silver):
+    """
+    Orchestrates the simulation and returns the top 10 ranked scenarios.
+    """
+    # 1. Generate grid
+    scenarios = generate_scenarios()
+    
+    # 2. Map features to model requirements
+    features = build_feature_frame(scenarios.copy(), df_silver)
+    
+    # 3. Batch Inference (Vectorized - very fast)
+    scenarios["predicted_engagement"] = model.predict(features)
+    
+    # 4. Rank and return
+    return scenarios.sort_values("predicted_engagement", ascending=False).head(10)

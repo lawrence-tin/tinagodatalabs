@@ -24,14 +24,14 @@ def load_silver_data(conn, client_id=None, platform=None):
 
     query = """
         SELECT *
-        FROM TEAM5PM_PROTOTYPE.SILVER.CANONICAL_PERFORMANCE
+        FROM TEAM5PM_PRODUCT.SILVER.CANONICAL_PERFORMANCE
         WHERE 1=1
     """
 
-    if client_id:
+    if client_id and client_id != "All":
         query += f" AND client_id = '{client_id}'"
     
-    if platform:
+    if platform and platform != "All":
         query += f" AND platform = '{platform}'"
 
     df = pd.read_sql(query, conn)
@@ -50,7 +50,7 @@ def load_silver_data(conn, client_id=None, platform=None):
 def load_gold_data(conn):
     query = """
         SELECT *
-        FROM TEAM5PM_PROTOTYPE.GOLD.AI_TRAINING_DATASET
+        FROM TEAM5PM_PRODUCT.GOLD.AI_TRAINING_DATASET
     """
 
     df = pd.read_sql(query, conn)
