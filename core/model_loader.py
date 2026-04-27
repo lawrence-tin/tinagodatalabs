@@ -32,7 +32,7 @@ def load_model(client_id: str, platform: str):
 
     # Try specific model from Snowflake stage, then fall back to default model
     for name in [model_name, default_model]:
-        stage_path = f"@TEAM5PM_PROTOTYPE.GOLD.MODELS/{name}"
+        stage_path = f"@TEAM5PM_PRODUCT.GOLD.MODELS/{name}"
         try:
             # Download from Snowflake stage to local temp
             files = session.file.get(stage_path, temp_dir)
