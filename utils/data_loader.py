@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+import bcrypt
 from snowflake.connector import connect
 
 # -----------------------------
@@ -16,25 +17,163 @@ def get_connection():
         role=st.secrets["snowflake"]["role"],
     )
 
+# -----------------------------
+# AUTHENTICATION FUNCTIONS
+# -----------------------------
+def authenticate_user(conn, email, password):
+    """
+    Authenticates a user against the CONFIG.USERS table.
+    Returns user details if successful, None otherwise.
+    """
+    query = """
+        SELECT user_id, email, password_hash
+        FROM TEAM5PM_PRODUCT.CONFIG.USERS
+        WHERE email = %s
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (email,))
+        df_user = pd.DataFrame(cursor.fetchall(), columns=[col[0] for col in cursor.description])
+        if not df_user.empty:
+            user_data = df_user.iloc[0]
+            # Check password hash
+            if bcrypt.checkpw(password.encode('utf-8'), user_data['PASSWORD_HASH'].encode('utf-8')):
+                return {"user_id": user_data['USER_ID'], "email": user_data['EMAIL']}
+        return None
+    except Exception as e:
+        st.error(f"Authentication error: {e}")
+        return None
+
+def fetch_user_clients(conn, user_id):
+    """
+    Fetches clients associated with a given user_id.
+    """
+    query = """
+        SELECT
+            c.client_id,
+            c.client_name,
+            ucm.role
+        FROM TEAM5PM_PRODUCT.CONFIG.USER_CLIENT_MAP ucm
+        JOIN TEAM5PM_PRODUCT.CONFIG.CLIENTS c ON ucm.client_id = c.client_id
+        WHERE ucm.user_id = %s
+    """
+    try:
+        df_clients = pd.read_sql(query, conn, params=(user_id,))
+        df_clients.columns = df_clients.columns.str.lower()
+        return df_clients.to_dict(orient='records')
+    except Exception as e:
+        st.error(f"Error fetching user clients: {e}")
+        return []
+
+def fetch_brands(conn, organization_id):
+    """
+    Fetches brands associated with a given organization_id (client_id).
+    """
+    query = """
+        SELECT brand_id, brand_name
+        FROM TEAM5PM_PRODUCT.CONFIG.BRANDS
+        WHERE organization_id = %s
+    """
+    try:
+        df_brands = pd.read_sql(query, conn, params=(organization_id,))
+        df_brands.columns = df_brands.columns.str.lower()
+        return df_brands.to_dict(orient='records')
+    except Exception as e:
+        st.error(f"Error fetching brands: {e}")
+        return []
+
+def create_client(conn, user_id, client_name):
+    """
+    Creates a new client in the CONFIG.CLIENTS table and links it to the user.
+    """
+    client_id = client_name.lower().replace(" ", "_")
+    cursor = conn.cursor()
+    try:
+        # 1. Insert the new client
+        cursor.execute(
+            "INSERT INTO TEAM5PM_PRODUCT.CONFIG.CLIENTS (client_id, client_name) VALUES (%s, %s)",
+            (client_id, client_name)
+        )
+        # 2. Map the current user to this client as an 'admin'
+        cursor.execute(
+            "INSERT INTO TEAM5PM_PRODUCT.CONFIG.USER_CLIENT_MAP (user_id, client_id, role) VALUES (%s, %s, %s)",
+            (user_id, client_id, 'admin')
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error creating client: {e}")
+        return False
+    finally:
+        cursor.close()
+
+def create_brand(conn, organization_id, brand_name):
+    """
+    Creates a new brand under a specific organization.
+    """
+    brand_id = brand_name.lower().replace(" ", "_")
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO TEAM5PM_PRODUCT.CONFIG.BRANDS (brand_id, organization_id, brand_name) VALUES (%s, %s, %s)",
+            (brand_id, organization_id, brand_name)
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error creating brand: {e}")
+        return False
+    finally:
+        cursor.close()
+
+def save_platform_credentials(conn, organization_id, brand_id, platform, account_id, api_key):
+    """
+    Saves API credentials for a specific client and platform.
+    """
+    query = """
+        INSERT INTO TEAM5PM_PRODUCT.CONFIG.CLIENT_PLATFORM_CREDENTIALS 
+        (organization_id, brand_id, platform, platform_account_id, api_key, access_token, is_active)
+        VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+    """
+    try:
+        cursor = conn.cursor()
+        # Now explicitly mapping organization and brand
+        cursor.execute(query, (organization_id, brand_id, platform, account_id, api_key, api_key))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error saving credentials: {e}")
+        return False
+    finally:
+        cursor.close()
+
+
+
 
 # -----------------------------
 # SILVER DATA LOADER
 # -----------------------------
-def load_silver_data(conn, client_id=None, platform=None):
+def load_silver_data(conn, organization_id=None, brand_id=None, platform=None):
 
     query = """
         SELECT *
         FROM TEAM5PM_PRODUCT.SILVER.CANONICAL_PERFORMANCE
         WHERE 1=1
     """
-
-    if client_id and client_id != "All":
-        query += f" AND client_id = '{client_id}'"
+    params = []
+    if organization_id and organization_id != "All":
+        query += " AND client_id = %s"
+        params.append(organization_id)
     
-    if platform and platform != "All":
-        query += f" AND platform = '{platform}'"
+    if brand_id and brand_id != "All":
+        query += " AND brand_id = %s"
+        params.append(brand_id)
 
-    df = pd.read_sql(query, conn)
+    if platform and platform != "All":
+        query += " AND platform = %s"
+        params.append(platform)
+
+    df = pd.read_sql(query, conn, params=params)
 
     df.columns = df.columns.str.lower()
 

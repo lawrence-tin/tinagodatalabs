@@ -2,8 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import plotly.graph_objects as go
-from utils.data_loader import get_connection, load_silver_data
-from utils.features import build_input
+from utils.data_loader import get_connection, load_silver_data, authenticate_user, fetch_user_clients, create_client, save_platform_credentials, fetch_brands, create_brand
 from core.model_loader import load_model
 from utils.optimizer import run_optimization
 
@@ -32,37 +31,108 @@ st.markdown("""
 # ---------------------------
 conn = get_connection()
 
+# ---------------------------
+# AUTHENTICATION
+# ---------------------------
+if "user" not in st.session_state:
+    st.sidebar.title("Login")
+    email = st.sidebar.text_input("Email")
+    password = st.sidebar.text_input("Password", type="password")
+
+    if st.sidebar.button("Login"):
+        user = authenticate_user(conn, email, password)
+        if user:
+            st.session_state["user"] = user
+            st.rerun()
+        else:
+            st.sidebar.error("Invalid credentials")
+    st.stop() # Stop execution until user logs in
+
+user_id = st.session_state["user"]["user_id"]
+user_email = st.session_state["user"]["email"]
+
+st.sidebar.write(f"Logged in as: {user_email}")
+if st.sidebar.button("Logout"):
+    del st.session_state["user"]
+    st.rerun()
+
+
 @st.cache_data(ttl=3600)
-def load_data(client_id, platform):
-    return load_silver_data(conn, client_id, platform)
+def load_data(org_id, brand_id, platform):
+    return load_silver_data(conn, org_id, brand_id, platform)
+
+def build_input(duration, title, money, question, numbers, hour, weekend, df_silver):
+    """Helper to structure features for the model."""
+    avg_views = float(df_silver['raw_views'].mean()) if not df_silver.empty else 0
+    avg_engagement = float(df_silver['engagement_rate_pct'].mean()) if not df_silver.empty else 0
+    
+    data = {
+        "duration_seconds": [duration],
+        "publish_hour_utc": [hour],
+        "has_money_symbol": [1 if money else 0],
+        "has_question_mark": [1 if question else 0],
+        "has_numbers": [1 if numbers else 0],
+        "title_length": [len(title)],
+        "is_weekend": [1 if weekend else 0],
+        "rolling_avg_views_5": [avg_views],
+        "rolling_avg_engagement_5": [avg_engagement],
+        "rolling_avg_duration_5": [duration],
+        "prev_video_views": [avg_views],
+        "prev_video_engagement": [avg_engagement],
+        "prev_video_has_money": [1 if money else 0]
+    }
+    return pd.DataFrame(data)
 
 # ---------------------------
-# SAAS: CLIENT ISOLATION
+# SAAS: ORGANIZATION & BRAND SELECTION
 # ---------------------------
-client_id = st.sidebar.selectbox(
-    "Client",
-    ["All", "team5pm", "mrbeast", "client_a", "client_b"]
+user_orgs = fetch_user_clients(conn, user_id)
+
+if not user_orgs:
+    st.warning("You are not assigned to any organizations. Please contact an admin or create one in Settings.")
+    st.stop()
+
+org_options = {org['client_name']: org['client_id'] for org in user_orgs}
+selected_org_name = st.sidebar.selectbox(
+    "Select Organization",
+    list(org_options.keys())
 )
+org_id = org_options[selected_org_name]
+
+brands = fetch_brands(conn, org_id)
+if not brands:
+    st.sidebar.warning(f"No brands found for {selected_org_name}")
+    brand_id = "All"
+else:
+    brand_options = {b['brand_name']: b['brand_id'] for b in brands}
+    brand_options["All Brands"] = "All"
+    selected_brand_name = st.sidebar.selectbox("Select Brand", list(brand_options.keys()))
+    brand_id = brand_options[selected_brand_name]
+
+# Get the user's role for the currently selected client
+user_role = next(c['role'] for c in user_orgs if c['client_id'] == org_id)
 
 platform = st.sidebar.selectbox(
     "Platform",
-    ["All", "youtube", "tiktok", "instagram", "facebook"]
+    ["All", "youtube", "tiktok", "instagram", "facebook"] # Keep "All" for platform filtering
 )
 
-df_silver = load_data(client_id, platform)
-model = load_model(client_id, platform)
+df_silver = load_data(org_id, brand_id, platform)
+model = load_model(org_id, platform) # Model currently remains mapped at Org level for MVP
 
 if df_silver.empty:
-    st.warning("No data available")
+    st.info("No data found for the selected filters. Try changing your selection or check your credentials.")
     st.stop()
 
 # ---------------------------
 # NAVIGATION
 # ---------------------------
-page = st.sidebar.radio(
-    "Navigation",
-    ["🏠 Overview", "🎬 Predict", "🧪 Simulator", "📊 Insights", "🧠 Strategy"]
-)
+nav_options = ["🏠 Overview", "🎬 Predict", "🧪 Simulator", "📊 Insights", "🧠 Strategy"]
+if user_role == 'admin':
+    nav_options.append("⚙️ Settings")
+    st.sidebar.success(f"🔓 Admin Access: {selected_org_name}")
+
+page = st.sidebar.radio("Navigation", nav_options)
 
 # =========================================================
 # 🏠 OVERVIEW
@@ -74,7 +144,7 @@ if page == "🏠 Overview":
     col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("Videos Analyzed", len(df_silver))
-    
+
     historical_avg_engagement = df_silver['engagement_rate_pct'].mean()
     col2.metric("Avg Engagement", f"{historical_avg_engagement:.2f}%")
     
@@ -287,6 +357,63 @@ elif page == "🧠 Strategy":
     - Titles with emotional triggers  
     - Posting between 14:00–20:00 UTC  
     """)
+
+# =========================================================
+# ⚙️ SETTINGS (Onboarding Flow)
+# =========================================================
+elif page == "⚙️ Settings":
+    st.markdown("## ⚙️ Account Settings")
+    
+    tab1, tab2, tab3 = st.tabs(["🏢 New Organization", "🏷️ New Brand", "🔗 Connect Platforms"])
+    
+    with tab1:
+        st.subheader("Create a new Client Workspace")
+        new_client_name = st.text_input("Client Name (e.g. MrBeast, Red Bull)")
+        if st.button("Create Workspace"):
+            if new_client_name:
+                if create_client(conn, user_id, new_client_name):
+                    st.success(f"Client '{new_client_name}' created! Refreshing...")
+                    st.rerun()
+            else:
+                st.error("Please enter a name.")
+
+    with tab2:
+        st.subheader(f"Add a Brand to {selected_org_name}")
+        new_brand_name = st.text_input("Brand Name (e.g. Nike, MrBeast Gaming)")
+        if st.button("Create Brand"):
+            if new_brand_name:
+                if create_brand(conn, org_id, new_brand_name):
+                    st.success(f"Brand '{new_brand_name}' created successfully!")
+                    st.rerun()
+            else:
+                st.error("Please enter a brand name.")
+
+    with tab3:
+        st.subheader(f"Connect Platforms for {selected_org_name}")
+        
+        target_platform = st.selectbox("Platform", ["youtube", "facebook", "instagram", "tiktok"])
+        # Handle case where no brands exist yet, default to org_id or an empty list
+        brand_ids_for_selection = [b['brand_id'] for b in brands] if brands else [org_id]
+        target_brand_id = st.selectbox("Select Brand to Link", brand_ids_for_selection)
+        account_id = st.text_input("Platform Account ID / Channel ID")
+        api_key = st.text_input("API Key / Access Token", type="password")
+        
+        if st.button("Link Platform"):
+            if account_id and api_key:
+                success = save_platform_credentials(
+                    conn, 
+                    org_id,
+                    target_brand_id,
+                    target_platform, 
+                    account_id, 
+                    api_key
+                )
+                if success:
+                    st.success(f"Successfully linked {target_platform}!")
+                    st.info("The ingestion engine will pick up this new client on the next run.")
+            else:
+                st.error("Please fill in all fields.")
+
 
 # ---------------------------
 # FOOTER

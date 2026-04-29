@@ -116,6 +116,7 @@ def upload_to_snowflake(filename):
             COPY INTO TEAM5PM_PRODUCT.BRONZE.RAW_SOCIAL_DATA (
                 platform,
                 platform_id,
+                client_id,
                 brand_id,
                 raw_response,
                 ingested_at,
@@ -125,6 +126,7 @@ def upload_to_snowflake(filename):
                 SELECT
                     $1:platform::STRING,
                     $1:platform_id::STRING,
+                    $1:client_id::STRING,
                     $1:brand_id::STRING,
                     $1:raw_response,
                     $1:ingested_at::TIMESTAMP_NTZ,
