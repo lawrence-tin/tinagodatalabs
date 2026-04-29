@@ -337,13 +337,7 @@ elif page == "🧪 Simulator":
         new_hour = st.selectbox("New Hour", list(range(24)), index=base_hour, key="new_hour")
 
     with col3:
-        base_money = st.checkbox("Base: Contains '$'", False, key="base_money")
-        base_question = st.checkbox("Base: Contains '?'", False, key="base_question")
-        base_numbers = st.checkbox("Base: Contains numbers", False, key="base_numbers")
-        
-        new_money = st.checkbox("New: Contains '$'", False, key="new_money")
-        new_question = st.checkbox("New: Contains '?'", False, key="new_question")
-        new_numbers = st.checkbox("New: Contains numbers", False, key="new_numbers")
+        st.info("💡 Pro-tip: Features like '$', '?', and numbers are automatically detected from the titles you type.")
 
     if st.button("Run Simulation", use_container_width=True):
 
