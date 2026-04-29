@@ -1,157 +1,140 @@
-We’re going to build the Auto Optimize Engine properly, not just hack something together.
+Perfect — this is exactly the right thing to do next.
+You don’t test multi-tenant SaaS with one client and one channel… you need realistic hierarchy data.
 
-🚀 STEP 4 — Auto Optimize Engine
-🎯 Goal
+I’ll walk you step-by-step so you can simulate a real agency setup.
 
-User clicks:
+🧠 Goal
 
-"Auto Optimize"
+You want your DB to look like this:
 
-And your system returns:
+Organization: GrowthMedia
+    ├── Brand: MrBeast
+    │     ├── YouTube
+    │     ├── Facebook
+    │
+    ├── Brand: Nike
+    │     ├── Instagram
+    │     ├── TikTok
+🔥 Step 1 — Insert multiple organizations
+INSERT INTO CONFIG.CLIENTS (client_id, client_name)
+VALUES
+    ('org_1', 'GrowthMedia Agency'),
+    ('org_2', 'Solo Creator Hub');
+🔥 Step 2 — Insert brands (CRITICAL)
+INSERT INTO CONFIG.BRANDS (brand_id, organization_id, brand_name)
+VALUES
+    -- Agency 1 brands
+    ('mrbeast', 'org_1', 'MrBeast'),
+    ('nike', 'org_1', 'Nike'),
+    ('redbull', 'org_1', 'Red Bull'),
 
-Best duration
-Best publish time
-Best title features
-Top 3 performing scenarios
-⚠️ Key Principle
+    -- Agency 2 brands
+    ('creator1', 'org_2', 'Solo Creator 1');
+🔥 Step 3 — Map users to organizations
+INSERT INTO CONFIG.USER_CLIENT_MAP (user_id, client_id, role)
+VALUES
+    ('admin_1', 'org_1', 'admin'),
+    ('admin_1', 'org_2', 'admin'),
 
-We are NOT training a new model.
+    ('client_1_user', 'org_1', 'admin'),
+    ('viewer_1', 'org_1', 'viewer');
+🔥 Step 4 — Add platform credentials per brand
 
-We are:
+This is where your ingestion connects.
 
-👉 Using your existing model to simulate many combinations
+INSERT INTO CONFIG.CLIENT_PLATFORM_CREDENTIALS (
+    client_id,
+    brand_id,
+    platform,
+    platform_account_id,
+    is_active
+)
+VALUES
+    -- MrBeast
+    ('org_1', 'mrbeast', 'youtube', 'UCX6OQ3DkcsbYNE6H8uQQuVA', TRUE),
+    ('org_1', 'mrbeast', 'facebook', 'mrbeast_page_id', TRUE),
 
-This is what makes it scalable.
+    -- Nike
+    ('org_1', 'nike', 'instagram', 'nike_ig_id', TRUE),
+    ('org_1', 'nike', 'tiktok', 'nike_tt_id', TRUE),
 
-🧱 STEP 4.1 — Where this logic lives
+    -- Red Bull
+    ('org_1', 'redbull', 'youtube', 'redbull_channel_id', TRUE),
 
-Create a new file:
+    -- Solo creator
+    ('org_2', 'creator1', 'youtube', 'creator_channel_id', TRUE);
+🔥 Step 5 — Simulate data in SILVER (if ingestion not ready)
 
-utils/optimizer.py
-✍️ STEP 4.2 — Add this code
-import pandas as pd
-import numpy as np
+You NEED data per brand or your UI will look broken.
 
-def generate_scenarios(df_silver):
-    """
-    Generate combinations of inputs to test
-    """
+INSERT INTO SILVER.CANONICAL_PERFORMANCE (
+    CONTENT_ID,
+    PLATFORM,
+    CLIENT_ID,
+    BRAND_ID,
+    CONTENT_TITLE,
+    PUBLISHED_AT,
+    DURATION_SECONDS,
+    RAW_VIEWS,
+    RAW_LIKES,
+    RAW_COMMENTS,
+    TITLE_LENGTH,
+    HAS_HASHTAGS,
+    HAS_EMOJIS,
+    ENGAGEMENT_RATE_PCT,
+    IS_ACTIVE
+)
+VALUES
+    -- MrBeast
+    ('vid_1', 'youtube', 'org_1', 'mrbeast',
+     'I Gave Away $1,000,000', CURRENT_TIMESTAMP(), 600,
+     10000000, 500000, 20000, 30, TRUE, FALSE, 5.2, TRUE),
 
-    durations = [240, 360, 480, 600, 900]  # seconds
-    hours = list(range(0, 24, 2))
+    -- Nike
+    ('vid_2', 'instagram', 'org_1', 'nike',
+     'Just Do It 🔥', CURRENT_TIMESTAMP(), 60,
+     2000000, 150000, 5000, 12, TRUE, TRUE, 7.5, TRUE),
 
-    scenarios = []
+    -- Red Bull
+    ('vid_3', 'youtube', 'org_1', 'redbull',
+     'Insane Cliff Jump', CURRENT_TIMESTAMP(), 300,
+     3000000, 120000, 4000, 18, FALSE, FALSE, 4.8, TRUE);
+🔥 Step 6 — Test your drill-down queries
+✅ 1. Get brands for organization
+SELECT * 
+FROM CONFIG.BRANDS
+WHERE organization_id = 'org_1';
+✅ 2. Get platforms for a brand
+SELECT platform
+FROM CONFIG.CLIENT_PLATFORM_CREDENTIALS
+WHERE client_id = 'org_1'
+AND brand_id = 'mrbeast';
+✅ 3. Load data (THIS powers your app)
+SELECT *
+FROM SILVER.CANONICAL_PERFORMANCE
+WHERE client_id = 'org_1'
+AND brand_id = 'mrbeast';
+🧠 Step 7 — What your UI should now do
 
-    for d in durations:
-        for h in hours:
-            for money in [0, 1]:
-                for question in [0, 1]:
-                    for numbers in [0, 1]:
+In Streamlit:
 
-                        scenarios.append({
-                            "duration_seconds": d,
-                            "publish_hour_utc": h,
-                            "has_money_symbol": money,
-                            "has_question_mark": question,
-                            "has_numbers": numbers
-                        })
+1. Select organization
+org = st.selectbox("Organization", orgs)
+2. Load brands dynamically
+brands = get_brands(org)
+brand = st.selectbox("Brand", brands)
+3. Load data
+df = load_data(client_id=org, brand_id=brand)
+⚠️ Common mistakes (you WILL hit these)
+❌ No data for selected brand → empty dashboard
+❌ Wrong joins → users see other clients’ data
+❌ Hardcoded brand → breaks SaaS
+🚀 What you’ve just enabled
 
-    return pd.DataFrame(scenarios)
+Now your app can:
 
+switch between brands instantly
+simulate agency workflows
+support multiple customers
 
-def build_feature_frame(scenarios, df_silver):
-    """
-    Add required model features (fallbacks)
-    """
-
-    avg_views = float(df_silver['raw_views'].mean())
-    avg_engagement = float(df_silver['engagement_rate_pct'].mean())
-    avg_duration = float(df_silver['duration_seconds'].mean())
-
-    scenarios["title_length"] = 10
-    scenarios["is_weekend"] = 0
-
-    scenarios["rolling_avg_views_5"] = avg_views
-    scenarios["rolling_avg_engagement_5"] = avg_engagement
-    scenarios["rolling_avg_duration_5"] = avg_duration
-
-    scenarios["prev_video_views"] = avg_views
-    scenarios["prev_video_engagement"] = avg_engagement
-    scenarios["prev_video_has_money"] = scenarios["has_money_symbol"]
-
-    return scenarios
-
-
-def run_optimization(model, df_silver):
-    """
-    Main optimizer function
-    """
-
-    scenarios = generate_scenarios(df_silver)
-    features = build_feature_frame(scenarios.copy(), df_silver)
-
-    predictions = model.predict(features)
-
-    scenarios["predicted_engagement"] = predictions
-
-    # Sort best first
-    scenarios = scenarios.sort_values("predicted_engagement", ascending=False)
-
-    return scenarios.head(10)
-🧱 STEP 4.3 — Plug into Streamlit
-
-Go to:
-
-streamlit_app.py
-🔁 Import it
-from utils.optimizer import run_optimization
-🔁 Add button under Predict section
-if st.button("⚡ Auto Optimize", use_container_width=True):
-
-    results = run_optimization(model, df_silver)
-
-    st.success("Top Optimized Scenarios")
-
-    st.dataframe(results.head(5), use_container_width=True)
-🧱 STEP 4.4 — Make it look like a PRODUCT
-
-Replace the raw table with:
-
-top3 = results.head(3)
-
-for i, row in top3.iterrows():
-    st.markdown(f"### 🏆 Option {i+1}")
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric("Duration", f"{int(row['duration_seconds']/60)} min")
-    col2.metric("Publish Hour", f"{int(row['publish_hour_utc'])}:00")
-    col3.metric("Engagement", f"{row['predicted_engagement']:.2f}%")
-
-    st.markdown(
-        f"""
-        💡 Includes:
-        {'💰' if row['has_money_symbol'] else ''}
-        {'❓' if row['has_question_mark'] else ''}
-        {'🔢' if row['has_numbers'] else ''}
-        """
-    )
-🧠 What you just built
-
-This is actually:
-
-👉 A brute-force optimization engine
-
-And it works because:
-
-Your feature space is small
-Model inference is fast
-🔥 Why this is powerful
-
-This turns your app from:
-
-❌ “Predictor”
-
-Into:
-
-✅ Decision engine
+👉 This is real SaaS behavior

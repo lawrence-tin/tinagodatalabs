@@ -1,5 +1,6 @@
 import requests
 import os
+import pandas as pd
 from datetime import datetime
 from ingestion.base_ingestion import process_ingestion
 from ingestion.config_loader import get_active_clients
@@ -69,12 +70,21 @@ def run():
 
     for _, row in clients.iterrows():
 
-        api_key = row["api_key"]
+        # Try to get API key from DB row, fallback to .env
+        db_api_key = row.get("api_key")
+        api_key = db_api_key if db_api_key and not pd.isna(db_api_key) else os.getenv("YOUTUBE_API_KEY")
+        
         channel_id = row["platform_account_id"]
         client_id = row["client_id"]
         brand_id = row["brand_id"]
 
+        if not api_key:
+            print(f"❌ Error: No API Key found for {client_id}. Please add it to .env as YOUTUBE_API_KEY or to the Snowflake CONFIG table.")
+            continue
+
+        key_source = "Snowflake" if db_api_key and not pd.isna(db_api_key) else "Environment (.env)"
         print(f"📡 Fetching YouTube for {client_id} | {brand_id}")
+        print(f"🔑 Using API Key from: {key_source}")
 
         try:
             items = fetch_youtube(api_key, channel_id)
