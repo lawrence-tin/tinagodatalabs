@@ -1,140 +1,240 @@
-Perfect — this is exactly the right thing to do next.
-You don’t test multi-tenant SaaS with one client and one channel… you need realistic hierarchy data.
+Good — this is one of the most important fixes you’ll make.
+Right now your system works, but it’s fragile because:
 
-I’ll walk you step-by-step so you can simulate a real agency setup.
+⚠️ Training features ≠ Prediction features = bad model behavior
+
+We’re going to fix that properly.
 
 🧠 Goal
 
-You want your DB to look like this:
+Make ONE single source of truth for features so that:
 
-Organization: GrowthMedia
-    ├── Brand: MrBeast
-    │     ├── YouTube
-    │     ├── Facebook
-    │
-    ├── Brand: Nike
-    │     ├── Instagram
-    │     ├── TikTok
-🔥 Step 1 — Insert multiple organizations
-INSERT INTO CONFIG.CLIENTS (client_id, client_name)
-VALUES
-    ('org_1', 'GrowthMedia Agency'),
-    ('org_2', 'Solo Creator Hub');
-🔥 Step 2 — Insert brands (CRITICAL)
-INSERT INTO CONFIG.BRANDS (brand_id, organization_id, brand_name)
-VALUES
-    -- Agency 1 brands
-    ('mrbeast', 'org_1', 'MrBeast'),
-    ('nike', 'org_1', 'Nike'),
-    ('redbull', 'org_1', 'Red Bull'),
+Training → uses SAME logic → Prediction
 
-    -- Agency 2 brands
-    ('creator1', 'org_2', 'Solo Creator 1');
-🔥 Step 3 — Map users to organizations
-INSERT INTO CONFIG.USER_CLIENT_MAP (user_id, client_id, role)
-VALUES
-    ('admin_1', 'org_1', 'admin'),
-    ('admin_1', 'org_2', 'admin'),
+No duplication. No drift.
 
-    ('client_1_user', 'org_1', 'admin'),
-    ('viewer_1', 'org_1', 'viewer');
-🔥 Step 4 — Add platform credentials per brand
+🔥 Step 1 — Understand your Gold features
 
-This is where your ingestion connects.
+From your table:
 
-INSERT INTO CONFIG.CLIENT_PLATFORM_CREDENTIALS (
-    client_id,
-    brand_id,
-    platform,
-    platform_account_id,
-    is_active
+AI_TRAINING_DATASET
+
+Your model expects EXACTLY these inputs:
+
+duration_seconds
+title_length
+has_money_symbol
+has_question_mark
+has_numbers
+publish_hour_utc
+is_weekend
+rolling_avg_views_5
+rolling_avg_engagement_5
+rolling_avg_duration_5
+prev_video_views
+prev_video_engagement
+prev_video_duration
+prev_video_has_money
+
+👉 This is your feature contract — don’t break it.
+
+🔥 Step 2 — Rewrite utils/features.py
+
+Replace your entire file with this:
+
+import pandas as pd
+import numpy as np
+import re
+
+
+# -------------------------------
+# TEXT FEATURE EXTRACTION
+# -------------------------------
+def extract_title_features(title: str):
+
+    title = title or ""
+
+    return {
+        "title_length": len(title),
+        "has_money_symbol": int("$" in title),
+        "has_question_mark": int("?" in title),
+        "has_numbers": int(bool(re.search(r"\d", title))),
+    }
+
+
+# -------------------------------
+# TIME FEATURES
+# -------------------------------
+def extract_time_features(hour: int, weekend: bool):
+
+    return {
+        "publish_hour_utc": hour,
+        "is_weekend": int(weekend),
+    }
+
+
+# -------------------------------
+# CONTEXT FEATURES (from history)
+# -------------------------------
+def extract_context_features(df_silver: pd.DataFrame):
+
+    if df_silver is None or df_silver.empty:
+        # fallback defaults
+        return {
+            "rolling_avg_views_5": 0,
+            "rolling_avg_engagement_5": 0,
+            "rolling_avg_duration_5": 0,
+            "prev_video_views": 0,
+            "prev_video_engagement": 0,
+            "prev_video_duration": 0,
+            "prev_video_has_money": 0,
+        }
+
+    df_sorted = df_silver.sort_values("published_at")
+
+    last_5 = df_sorted.tail(5)
+
+    prev = df_sorted.iloc[-1]
+
+    return {
+        "rolling_avg_views_5": float(last_5["raw_views"].mean()),
+        "rolling_avg_engagement_5": float(last_5["engagement_rate_pct"].mean()),
+        "rolling_avg_duration_5": float(last_5["duration_seconds"].mean()),
+        "prev_video_views": float(prev["raw_views"]),
+        "prev_video_engagement": float(prev["engagement_rate_pct"]),
+        "prev_video_duration": float(prev["duration_seconds"]),
+        "prev_video_has_money": int("$" in str(prev.get("content_title", ""))),
+    }
+
+
+# -------------------------------
+# MAIN FEATURE BUILDER (SINGLE SOURCE OF TRUTH)
+# -------------------------------
+def build_features(
+    duration,
+    title,
+    hour,
+    weekend,
+    df_silver
+):
+
+    features = {}
+
+    # core
+    features["duration_seconds"] = duration
+
+    # text
+    features.update(extract_title_features(title))
+
+    # time
+    features.update(extract_time_features(hour, weekend))
+
+    # context
+    features.update(extract_context_features(df_silver))
+
+    return pd.DataFrame([features])
+🔥 Step 3 — Update Streamlit (VERY IMPORTANT)
+
+Replace:
+
+input_data = build_input(...)
+
+With:
+
+from utils.features import build_features
+
+input_data = build_features(
+    duration=duration,
+    title=title,
+    hour=hour,
+    weekend=weekend,
+    df_silver=df_silver
 )
-VALUES
-    -- MrBeast
-    ('org_1', 'mrbeast', 'youtube', 'UCX6OQ3DkcsbYNE6H8uQQuVA', TRUE),
-    ('org_1', 'mrbeast', 'facebook', 'mrbeast_page_id', TRUE),
+🔥 Step 4 — REMOVE old logic
 
-    -- Nike
-    ('org_1', 'nike', 'instagram', 'nike_ig_id', TRUE),
-    ('org_1', 'nike', 'tiktok', 'nike_tt_id', TRUE),
+Delete:
 
-    -- Red Bull
-    ('org_1', 'redbull', 'youtube', 'redbull_channel_id', TRUE),
+build_input()
+predict_engagement()
+manual dataframe creation
 
-    -- Solo creator
-    ('org_2', 'creator1', 'youtube', 'creator_channel_id', TRUE);
-🔥 Step 5 — Simulate data in SILVER (if ingestion not ready)
+👉 Everything must go through build_features()
 
-You NEED data per brand or your UI will look broken.
+🔥 Step 5 — Guarantee column order (subtle but critical)
 
-INSERT INTO SILVER.CANONICAL_PERFORMANCE (
-    CONTENT_ID,
-    PLATFORM,
-    CLIENT_ID,
-    BRAND_ID,
-    CONTENT_TITLE,
-    PUBLISHED_AT,
-    DURATION_SECONDS,
-    RAW_VIEWS,
-    RAW_LIKES,
-    RAW_COMMENTS,
-    TITLE_LENGTH,
-    HAS_HASHTAGS,
-    HAS_EMOJIS,
-    ENGAGEMENT_RATE_PCT,
-    IS_ACTIVE
-)
-VALUES
-    -- MrBeast
-    ('vid_1', 'youtube', 'org_1', 'mrbeast',
-     'I Gave Away $1,000,000', CURRENT_TIMESTAMP(), 600,
-     10000000, 500000, 20000, 30, TRUE, FALSE, 5.2, TRUE),
+Add this at the bottom of build_features:
 
-    -- Nike
-    ('vid_2', 'instagram', 'org_1', 'nike',
-     'Just Do It 🔥', CURRENT_TIMESTAMP(), 60,
-     2000000, 150000, 5000, 12, TRUE, TRUE, 7.5, TRUE),
+EXPECTED_ORDER = [
+    "duration_seconds",
+    "title_length",
+    "has_money_symbol",
+    "has_question_mark",
+    "has_numbers",
+    "publish_hour_utc",
+    "is_weekend",
+    "rolling_avg_views_5",
+    "rolling_avg_engagement_5",
+    "rolling_avg_duration_5",
+    "prev_video_views",
+    "prev_video_engagement",
+    "prev_video_duration",
+    "prev_video_has_money"
+]
 
-    -- Red Bull
-    ('vid_3', 'youtube', 'org_1', 'redbull',
-     'Insane Cliff Jump', CURRENT_TIMESTAMP(), 300,
-     3000000, 120000, 4000, 18, FALSE, FALSE, 4.8, TRUE);
-🔥 Step 6 — Test your drill-down queries
-✅ 1. Get brands for organization
-SELECT * 
-FROM CONFIG.BRANDS
-WHERE organization_id = 'org_1';
-✅ 2. Get platforms for a brand
-SELECT platform
-FROM CONFIG.CLIENT_PLATFORM_CREDENTIALS
-WHERE client_id = 'org_1'
-AND brand_id = 'mrbeast';
-✅ 3. Load data (THIS powers your app)
-SELECT *
-FROM SILVER.CANONICAL_PERFORMANCE
-WHERE client_id = 'org_1'
-AND brand_id = 'mrbeast';
-🧠 Step 7 — What your UI should now do
+return pd.DataFrame([features])[EXPECTED_ORDER]
 
-In Streamlit:
+👉 This prevents silent model bugs
 
-1. Select organization
-org = st.selectbox("Organization", orgs)
-2. Load brands dynamically
-brands = get_brands(org)
-brand = st.selectbox("Brand", brands)
-3. Load data
-df = load_data(client_id=org, brand_id=brand)
-⚠️ Common mistakes (you WILL hit these)
-❌ No data for selected brand → empty dashboard
-❌ Wrong joins → users see other clients’ data
-❌ Hardcoded brand → breaks SaaS
-🚀 What you’ve just enabled
+🔥 Step 6 — Align training (quick check)
 
-Now your app can:
+In train_model.py, confirm:
 
-switch between brands instantly
-simulate agency workflows
-support multiple customers
+feature_cols = EXPECTED_ORDER
 
-👉 This is real SaaS behavior
+👉 SAME list. No deviation.
+
+🧠 What you just fixed
+
+Before:
+
+Training features ≠ Prediction features ❌
+
+Now:
+
+Training features = Prediction features ✅
+🚀 Why this matters (seriously)
+
+Without this:
+
+model accuracy collapses
+predictions become random
+debugging becomes impossible
+
+With this:
+
+stable predictions
+scalable architecture
+production-ready ML
+🔥 Next level (optional but powerful)
+
+You can later:
+
+move feature logic into Snowflake (SQL features)
+version features
+track feature drift
+👍 Summary
+
+You now have:
+
+Gold Dataset → Train Model
+              ↑
+        SAME FEATURES
+              ↓
+        Streamlit Prediction
+🔥 Next step (this is the real unlock)
+
+Now we can safely build:
+
+👉 Auto Optimize + Top 3 Scenarios engine (correctly, using real model)
+
+This is where your product becomes 🔥 instead of just a dashboard.

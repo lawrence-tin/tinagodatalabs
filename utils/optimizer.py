@@ -1,51 +1,50 @@
 import pandas as pd
 import numpy as np
 from itertools import product
+from utils.features import extract_context_features, EXPECTED_ORDER
 
 def generate_scenarios():
     """
     Generate all possible combinations of categorical/discrete inputs.
     """
-    durations = [240, 360, 480, 600, 900, 1200]
-    hours = list(range(0, 24, 2))  # Every 2 hours
+    durations = [60, 300, 600, 900, 1200]
+    hours = [10, 14, 16, 18, 20, 22]  # High-traffic windows
     money_flags = [0, 1]
     question_flags = [0, 1]
     number_flags = [0, 1]
+    weekends = [0, 1]
+    title_lengths = [30, 55, 85] # Short, Medium, Long
 
-    combos = list(product(durations, hours, money_flags, question_flags, number_flags))
+    combos = list(product(durations, hours, money_flags, question_flags, number_flags, weekends, title_lengths))
     
     return pd.DataFrame(combos, columns=[
         "duration_seconds", 
         "publish_hour_utc", 
         "has_money_symbol", 
         "has_question_mark", 
-        "has_numbers"
+        "has_numbers",
+        "is_weekend",
+        "title_length"
     ])
 
-def build_feature_frame(scenarios, df_silver):
+def build_feature_frame(scenarios, df_silver, platform_name):
     """
     Prepares the full feature set required by the model using silver data averages.
     """
-    # Use historical averages as the 'baseline' state for the simulation
-    avg_views = float(df_silver['raw_views'].mean()) if 'raw_views' in df_silver.columns else 0
-    avg_engagement = float(df_silver['engagement_rate_pct'].mean())
-    avg_duration = float(df_silver['duration_seconds'].mean())
+    # Get contextual averages once
+    context = extract_context_features(df_silver)
 
-    # Static/Inferred features
-    scenarios["title_length"] = 10
-    scenarios["is_weekend"] = 0
+    # Platform encoding
+    platform_map = {"youtube": 0, "tiktok": 1, "instagram": 2, "facebook": 3, "all": 0}
+    scenarios["platform_encoded"] = platform_map.get(platform_name.lower(), 0)
     
-    # History-based features (Contextual scaling)
-    scenarios["rolling_avg_views_5"] = avg_views
-    scenarios["rolling_avg_engagement_5"] = avg_engagement
-    scenarios["rolling_avg_duration_5"] = avg_duration
-    scenarios["prev_video_views"] = avg_views
-    scenarios["prev_video_engagement"] = avg_engagement
-    scenarios["prev_video_has_money"] = scenarios["has_money_symbol"]
+    # Apply historical context to every row in the scenario grid
+    for col, value in context.items():
+        scenarios[col] = value
 
-    return scenarios
+    return scenarios[EXPECTED_ORDER]
 
-def run_optimization(model, df_silver):
+def run_optimization(model, df_silver, platform):
     """
     Orchestrates the simulation and returns the top 10 ranked scenarios.
     """
@@ -53,7 +52,7 @@ def run_optimization(model, df_silver):
     scenarios = generate_scenarios()
     
     # 2. Map features to model requirements
-    features = build_feature_frame(scenarios.copy(), df_silver)
+    features = build_feature_frame(scenarios.copy(), df_silver, platform)
     
     # 3. Batch Inference (Vectorized - very fast)
     scenarios["predicted_engagement"] = model.predict(features)

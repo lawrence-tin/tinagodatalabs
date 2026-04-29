@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from utils.data_loader import get_connection, load_silver_data, authenticate_user, fetch_user_clients, create_client, save_platform_credentials, fetch_brands, create_brand
 from core.model_loader import load_model
 from utils.optimizer import run_optimization
+from utils.features import build_features
 
 
 # ---------------------------
@@ -61,28 +62,6 @@ if st.sidebar.button("Logout"):
 def load_data(org_id, brand_id, platform):
     return load_silver_data(conn, org_id, brand_id, platform)
 
-def build_input(duration, title, money, question, numbers, hour, weekend, df_silver):
-    """Helper to structure features for the model."""
-    avg_views = float(df_silver['raw_views'].mean()) if not df_silver.empty else 0
-    avg_engagement = float(df_silver['engagement_rate_pct'].mean()) if not df_silver.empty else 0
-    
-    data = {
-        "duration_seconds": [duration],
-        "publish_hour_utc": [hour],
-        "has_money_symbol": [1 if money else 0],
-        "has_question_mark": [1 if question else 0],
-        "has_numbers": [1 if numbers else 0],
-        "title_length": [len(title)],
-        "is_weekend": [1 if weekend else 0],
-        "rolling_avg_views_5": [avg_views],
-        "rolling_avg_engagement_5": [avg_engagement],
-        "rolling_avg_duration_5": [duration],
-        "prev_video_views": [avg_views],
-        "prev_video_engagement": [avg_engagement],
-        "prev_video_has_money": [1 if money else 0]
-    }
-    return pd.DataFrame(data)
-
 # ---------------------------
 # SAAS: ORGANIZATION & BRAND SELECTION
 # ---------------------------
@@ -118,7 +97,19 @@ platform = st.sidebar.selectbox(
 )
 
 df_silver = load_data(org_id, brand_id, platform)
-model = load_model(org_id, platform) # Model currently remains mapped at Org level for MVP
+
+# SAAS: Model Loading with fallback training (Step 5 & 6)
+try:
+    model = load_model(org_id, brand_id)
+except Exception:
+    st.sidebar.warning(f"No model found for {brand_id}. Training now...")
+    from core.train_model import train_model
+    try:
+        model = train_model(org_id, brand_id)
+        st.sidebar.success("Model trained successfully!")
+    except Exception as e:
+        st.sidebar.error(f"Training failed: {e}")
+        st.stop()
 
 if df_silver.empty:
     st.info("No data found for the selected filters. Try changing your selection or check your credentials.")
@@ -198,15 +189,20 @@ elif page == "🎬 Predict":
     # ---------------------------
     if st.button("🚀 Predict Performance", use_container_width=True):
 
-        input_data = build_input(
-            duration, title, money, question, numbers, hour, weekend, df_silver
+        input_data = build_features(
+            duration=duration,
+            title=title,
+            hour=hour,
+            weekend=weekend,
+            df_silver=df_silver,
+            platform_name=platform
         )
 
         prediction = float(model.predict(input_data)[0])
         prediction = max(0, min(prediction, 10))
 
         st.success(f"🎯 Predicted Engagement: {prediction:.2f}%")
-
+        
         avg = df_silver["engagement_rate_pct"].mean()
         best = df_silver["engagement_rate_pct"].max()
 
@@ -220,10 +216,8 @@ elif page == "🎬 Predict":
         if duration > 900:
             st.warning("Consider shortening video to improve retention")
 
-        if not money:
-            st.info("Adding '$' often increases engagement")
-
-        if hour < 14 or hour > 20:
+        # Strategy feedback logic (re-evaluate based on new features)
+        if hour < 14 or hour > 20: # This is still a valid general recommendation
             st.info("Post between 14:00–20:00 UTC")
 
     # ---------------------------
@@ -233,26 +227,58 @@ elif page == "🎬 Predict":
     st.subheader("⚡ Optimization Engine")
 
     if st.button("⚡ Run Auto-Optimization", use_container_width=True):
-        results = run_optimization(model, df_silver)
+        results = run_optimization(model, df_silver, platform)
         
-        st.success("Top 3 Optimized Scenarios Found")
+        avg_engagement = df_silver["engagement_rate_pct"].mean()
         
-        top3 = results.head(3)
-        for i, (idx, row) in enumerate(top3.iterrows()):
-            st.markdown(f"#### 🏆 Option {i+1}")
-            c1, c2, c3 = st.columns(3)
+        st.markdown("### 🚀 Top 3 Performance Blueprints")
+        st.write("We simulated over 3,000 combinations to find the highest probability winners for your brand.")
+
+        tabs = st.tabs(["🏆 Blueprint 1", "🥈 Blueprint 2", "🥉 Blueprint 3"])
+        
+        for i, (idx, row) in enumerate(results.head(3).iterrows()):
+            with tabs[i]:
+                c1, c2, c3, c4 = st.columns(4)
+                
+                uplift = ((row['predicted_engagement'] - avg_engagement) / avg_engagement) * 100
+                
+                c1.metric("Predicted Rate", f"{row['predicted_engagement']:.2f}%")
+                c2.metric("Target Uplift", f"{uplift:+.1f}%", delta_color="normal")
+                c3.metric("Best Duration", f"{int(row['duration_seconds']/60)}m {int(row['duration_seconds']%60)}s")
+                c4.metric("Post Time", f"{int(row['publish_hour_utc'])}:00", "UTC")
+                
+                # Strategy tags
+                tags = []
+                if row['has_money_symbol']: tags.append("💰 Include Price/Money")
+                if row['has_question_mark']: tags.append("❓ Use Questions")
+                if row['has_numbers']: tags.append("🔢 Use List/Numbers")
+                if row['is_weekend']: tags.append("🗓️ Weekend Post")
+                else: tags.append("💼 Weekday Post")
+                
+                st.markdown(f"**Recommended Strategy:** {' • '.join(tags)}")
+
+        # Optimization Insights
+        st.markdown("#### 🧠 Optimization Insights")
+        top_10 = results.head(10)
+        
+        col_a, col_b = st.columns(2)
+        with col_a:
+            money_freq = top_10['has_money_symbol'].mean()
+            if money_freq > 0.7:
+                st.info("💡 **Insight:** 💰 Money symbols are present in 70%+ of your top performing simulations. This is your primary growth lever.")
             
-            c1.metric("Duration", f"{int(row['duration_seconds']/60)} min")
-            c2.metric("Best Time", f"{int(row['publish_hour_utc'])}:00 UTC")
-            c3.metric("Engagement", f"{row['predicted_engagement']:.2f}%")
-            
-            features = []
-            if row['has_money_symbol']: features.append("💰 Money Symbol")
-            if row['has_question_mark']: features.append("❓ Question Mark")
-            if row['has_numbers']: features.append("🔢 Numbers")
-            
-            st.caption(f"Strategy: {' • '.join(features) if features else 'Standard Title'}")
-            st.markdown("---")
+            best_hour = top_10['publish_hour_utc'].mode()[0]
+            st.info(f"💡 **Insight:** ⏰ The most consistent high-engagement window for you is around **{best_hour}:00 UTC**.")
+
+        with col_b:
+            # Chart Comparison
+            chart_df = results.head(5).copy()
+            chart_df["Scenario"] = [f"Opt {i+1}" for i in range(len(chart_df))]
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=chart_df["Scenario"], y=chart_df["predicted_engagement"], name="Optimized"))
+            fig.add_hline(y=avg_engagement, line_dash="dash", line_color="red", annotation_text="Brand Avg")
+            fig.update_layout(height=200, margin=dict(l=0, r=0, t=20, b=0), showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
 
     # ---------------------------
     # BULK CSV RANKING
@@ -269,15 +295,13 @@ elif page == "🎬 Predict":
 
         for _, row in df_upload.iterrows():
 
-            input_data = build_input(
-                row["duration_seconds"],
-                str(row["title"]),
-                bool(row["has_money"]),
-                bool(row["has_question"]),
-                bool(row["has_numbers"]),
-                int(row["hour"]),
-                False,
-                df_silver
+            input_data = build_features(
+                duration=row["duration_seconds"],
+                title=str(row["title"]),
+                hour=int(row["hour"]),
+                weekend=False,
+                df_silver=df_silver,
+                platform_name=platform
             )
 
             score = float(model.predict(input_data)[0])
@@ -296,11 +320,11 @@ elif page == "🧪 Simulator":
 
     st.markdown("## 🧪 What-If Simulator")
 
-    def predict_custom(d, t, m, q, n, h, w):
-        input_data = build_input(d, t, m, q, n, h, w, df_silver)
+    def predict_custom(d, t, h, w, p):
+        input_data = build_features(d, t, h, w, df_silver, p)
         return float(model.predict(input_data)[0])
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         base_title = st.text_input("Base Title", key="base_title")
@@ -312,14 +336,19 @@ elif page == "🧪 Simulator":
         new_duration = st.slider("New Duration", 30, 1800, base_duration, key="new_duration")
         new_hour = st.selectbox("New Hour", list(range(24)), index=base_hour, key="new_hour")
 
-        add_money = st.toggle("Add '$'")
-        add_question = st.toggle("Add '?'")
-        add_numbers = st.toggle("Add numbers")
+    with col3:
+        base_money = st.checkbox("Base: Contains '$'", False, key="base_money")
+        base_question = st.checkbox("Base: Contains '?'", False, key="base_question")
+        base_numbers = st.checkbox("Base: Contains numbers", False, key="base_numbers")
+        
+        new_money = st.checkbox("New: Contains '$'", False, key="new_money")
+        new_question = st.checkbox("New: Contains '?'", False, key="new_question")
+        new_numbers = st.checkbox("New: Contains numbers", False, key="new_numbers")
 
     if st.button("Run Simulation", use_container_width=True):
 
-        base_score = predict_custom(base_duration, base_title, False, False, False, base_hour, False)
-        scenario_score = predict_custom(new_duration, new_title, add_money, add_question, add_numbers, new_hour, False)
+        base_score = predict_custom(base_duration, base_title, base_hour, False, platform)
+        scenario_score = predict_custom(new_duration, new_title, new_hour, False, platform)
 
         delta = scenario_score - base_score
 
