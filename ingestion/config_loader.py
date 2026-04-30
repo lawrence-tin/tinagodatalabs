@@ -3,25 +3,35 @@ import snowflake.connector
 from ingestion.base_ingestion import SNOWFLAKE_CONFIG, validate_config
 
 
-def get_active_clients(platform: str):
+def get_active_clients(platform: str, client_id=None, brand_id=None):
     validate_config()
     try:
         conn = snowflake.connector.connect(**SNOWFLAKE_CONFIG)
         
-        query = f"""
+        query = """
             SELECT 
-                client_id,
+                organization_id AS client_id,
                 brand_id,
                 platform,
                 api_key,
                 access_token,
                 platform_account_id
             FROM TEAM5PM_PRODUCT.CONFIG.CLIENT_PLATFORM_CREDENTIALS
-            WHERE platform = '{platform}'
+            WHERE platform = %s
               AND is_active = TRUE
         """
+        params = [platform]
 
-        df = pd.read_sql(query, conn)
+        if client_id:
+            query += " AND organization_id = %s"
+            params.append(client_id)
+        if brand_id:
+            query += " AND brand_id = %s"
+            params.append(brand_id)
+
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        df = pd.DataFrame(cursor.fetchall(), columns=[col[0] for col in cursor.description])
         df.columns = df.columns.str.lower()
         conn.close()
         return df

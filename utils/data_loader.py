@@ -1,6 +1,8 @@
 import pandas as pd
 import streamlit as st
 import bcrypt
+import uuid
+from datetime import datetime
 from snowflake.connector import connect
 
 # -----------------------------
@@ -44,6 +46,27 @@ def authenticate_user(conn, email, password):
         st.error(f"Authentication error: {e}")
         return None
 
+def register_user(conn, email, password):
+    """
+    Registers a new user by hashing their password and inserting into CONFIG.USERS.
+    Returns the new user_id if successful.
+    """
+    user_id = str(uuid.uuid4())[:8]  # Generate a unique short ID
+    hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO TEAM5PM_PRODUCT.CONFIG.USERS (user_id, email, password_hash) VALUES (%s, %s, %s)",
+            (user_id, email, hashed)
+        )
+        conn.commit()
+        return user_id
+    except Exception as e:
+        st.error(f"Registration error: {e}")
+        return None
+    finally:
+        cursor.close()
+
 def fetch_user_clients(conn, user_id):
     """
     Fetches clients associated with a given user_id.
@@ -58,7 +81,9 @@ def fetch_user_clients(conn, user_id):
         WHERE ucm.user_id = %s
     """
     try:
-        df_clients = pd.read_sql(query, conn, params=(user_id,))
+        cursor = conn.cursor()
+        cursor.execute(query, (user_id,))
+        df_clients = pd.DataFrame(cursor.fetchall(), columns=[col[0] for col in cursor.description])
         df_clients.columns = df_clients.columns.str.lower()
         return df_clients.to_dict(orient='records')
     except Exception as e:
@@ -75,7 +100,9 @@ def fetch_brands(conn, organization_id):
         WHERE organization_id = %s
     """
     try:
-        df_brands = pd.read_sql(query, conn, params=(organization_id,))
+        cursor = conn.cursor()
+        cursor.execute(query, (organization_id,))
+        df_brands = pd.DataFrame(cursor.fetchall(), columns=[col[0] for col in cursor.description])
         df_brands.columns = df_brands.columns.str.lower()
         return df_brands.to_dict(orient='records')
     except Exception as e:
@@ -147,6 +174,77 @@ def save_platform_credentials(conn, organization_id, brand_id, platform, account
     finally:
         cursor.close()
 
+def fetch_platform_connections(conn, organization_id):
+    """
+    Fetches all platform connections for a given organization.
+    """
+    query = """
+        SELECT organization_id, brand_id, platform, platform_account_id, is_active
+        FROM TEAM5PM_PRODUCT.CONFIG.CLIENT_PLATFORM_CREDENTIALS
+        WHERE organization_id = %s
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (organization_id,))
+        df = pd.DataFrame(cursor.fetchall(), columns=[col[0] for col in cursor.description])
+        df.columns = df.columns.str.lower()
+        return df
+    except Exception as e:
+        st.error(f"Error fetching platform connections: {e}")
+        return pd.DataFrame()
+
+def fetch_org_platform_keys(conn, organization_id, platform):
+    """
+    Fetches unique API keys previously used by this organization for a specific platform.
+    """
+    query = """
+        SELECT DISTINCT api_key
+        FROM TEAM5PM_PRODUCT.CONFIG.CLIENT_PLATFORM_CREDENTIALS
+        WHERE organization_id = %s AND platform = %s AND api_key IS NOT NULL
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (organization_id, platform))
+        keys = [row[0] for row in cursor.fetchall()]
+        return keys
+    except Exception as e:
+        print(f"Error fetching existing keys: {e}")
+        return []
+
+
+
+# -----------------------------
+
+def fetch_brand_stats(conn, organization_id, brand_id, platform):
+    """
+    Fetches the latest sync time and record count for a specific brand/platform from Silver.
+    """
+    query = """
+        SELECT 
+            MAX(published_at) as last_sync,
+            COUNT(*) as record_count
+        FROM TEAM5PM_PRODUCT.SILVER.CANONICAL_PERFORMANCE
+        WHERE client_id = %s AND brand_id = %s AND platform = %s
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (organization_id, brand_id, platform))
+        row = cursor.fetchone()
+        if row and row[0]:
+            last_sync = row[0]
+            # Ensure last_sync is a datetime object for formatting
+            if not isinstance(last_sync, datetime):
+                last_sync = pd.to_datetime(last_sync)
+            
+            return last_sync.strftime('%Y-%m-%d %H:%M'), int(row[1])
+    except Exception as e:
+        # Log the error but return default values to avoid crashing the UI
+        print(f"Error fetching brand stats for {organization_id}/{brand_id}/{platform}: {e}")
+        pass
+    return "Never", 0
+
+
+# -----------------------------
 
 
 
@@ -173,9 +271,17 @@ def load_silver_data(conn, organization_id=None, brand_id=None, platform=None):
         query += " AND platform = %s"
         params.append(platform)
 
-    df = pd.read_sql(query, conn, params=params)
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    df = pd.DataFrame(cursor.fetchall(), columns=[col[0] for col in cursor.description])
 
     df.columns = df.columns.str.lower()
+
+    # Convert numeric columns from Decimal (Snowflake default) to float for calculations
+    numeric_cols = ["engagement_rate_pct", "raw_views", "duration_seconds"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if "published_at" in df.columns:
         df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce")
@@ -192,7 +298,9 @@ def load_gold_data(conn):
         FROM TEAM5PM_PRODUCT.GOLD.AI_TRAINING_DATASET
     """
 
-    df = pd.read_sql(query, conn)
+    cursor = conn.cursor()
+    cursor.execute(query)
+    df = pd.DataFrame(cursor.fetchall(), columns=[col[0] for col in cursor.description])
     df.columns = df.columns.str.lower()
 
     return df

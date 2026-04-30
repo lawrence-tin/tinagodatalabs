@@ -1,54 +1,48 @@
 import joblib
 import streamlit as st
-from snowflake.snowpark import Session
 import os
+from datetime import datetime
 
-
-# -----------------------------
-# SINGLE MODEL LOADER (SAAS SAFE)
-# -----------------------------
 @st.cache_resource
-def load_model(client_id: str, platform: str):
+def load_model(org_id, brand_id, platform):
+    """
+    Loads the trained model. In an MVP, we use a single global model.
+    In production, you could load brand-specific models here.
+    """
+    brand_model_path = f"models/{brand_id}/model.joblib.gz"
+    global_model_path = "models/global_model.joblib.gz"
+    legacy_model_path = "models/engagement_model.joblib.gz"
+    
+    # 1. Try Brand-Specific Model
+    if brand_id != "All" and os.path.exists(brand_model_path):
+        return joblib.load(brand_model_path)
+    
+    # 2. Try Global Model
+    if os.path.exists(global_model_path):
+        return joblib.load(global_model_path)
 
-    try:
-        from snowflake.snowpark.context import get_active_session
-        session = get_active_session()
-    except:
-        # Fallback for local development using secrets
-        session = Session.builder.configs(st.secrets["snowflake"]).create()
+    # 3. Try Legacy Model (Fallback)
+    if os.path.exists(legacy_model_path):
+        return joblib.load(legacy_model_path)
 
-    model_name = f"{client_id}_{platform}.joblib.gz"
-    default_model = "engagement_model.joblib.gz"
+    st.warning("No ML model found. Using global defaults.")
+    return None
 
-    # 1. Local Development Check (try specific model first, then fall back to default)
-    for name in [model_name, default_model]:
-        local_dev_path = os.path.join(os.getcwd(), "models", name)
-        if os.path.exists(local_dev_path):
-            return joblib.load(local_dev_path)
-
-    # 2. SaaS Production Path (Snowflake Stage)
-    temp_dir = os.path.join(os.getcwd(), "temp")
-    os.makedirs(temp_dir, exist_ok=True)
-
-    # Try specific model from Snowflake stage, then fall back to default model
-    for name in [model_name, default_model]:
-        stage_path = f"@TEAM5PM_PRODUCT.GOLD.MODELS/{name}"
-        try:
-            # Download from Snowflake stage to local temp
-            files = session.file.get(stage_path, temp_dir)
-            
-            if files:
-                local_path = os.path.join(temp_dir, name)
-                return joblib.load(local_path)
-        except Exception:
-            # If specific model fails (e.g., doesn't exist on stage), try the next one
-            continue
-
-    # 3. Fail gracefully if no model is found anywhere
-    st.error(f"Model not found: {model_name}")
-    st.info(
-        f"We couldn't find a specific model for **{client_id}** on **{platform}**. "
-        f"Please ensure `{model_name}` or `{default_model}` exists in your local `models/` "
-        "folder or the Snowflake `@MODELS` stage."
-    )
-    st.stop()
+def get_model_status(brand_id):
+    """
+    Returns the status and last trained timestamp of the model for a brand.
+    """
+    brand_model_path = f"models/{brand_id}/model.joblib.gz"
+    global_model_path = "models/global_model.joblib.gz"
+    
+    if brand_id != "All" and os.path.exists(brand_model_path):
+        mtime = os.path.getmtime(brand_model_path)
+        dt_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
+        return "✅ Brand Trained", dt_str
+        
+    if os.path.exists(global_model_path):
+        mtime = os.path.getmtime(global_model_path)
+        dt_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
+        return "⚠️ Global Fallback", dt_str
+        
+    return "❌ Not Trained", "N/A"

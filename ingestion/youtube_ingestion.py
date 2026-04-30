@@ -63,8 +63,8 @@ def fetch_youtube(api_key, channel_id):
     return all_details
 
 
-def run():
-    clients = get_active_clients("youtube")
+def run(client_id=None, brand_id=None):
+    clients = get_active_clients("youtube", client_id=client_id, brand_id=brand_id)
 
     all_records = []
 

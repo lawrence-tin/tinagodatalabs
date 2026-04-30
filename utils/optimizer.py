@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from itertools import product
+from utils.features import EXPECTED_ORDER
 
 def generate_scenarios():
     """
@@ -22,7 +23,7 @@ def generate_scenarios():
         "has_numbers"
     ])
 
-def build_feature_frame(scenarios, df_silver):
+def build_feature_frame(scenarios, df_silver, platform):
     """
     Prepares the full feature set required by the model using silver data averages.
     """
@@ -41,11 +42,16 @@ def build_feature_frame(scenarios, df_silver):
     scenarios["rolling_avg_duration_5"] = avg_duration
     scenarios["prev_video_views"] = avg_views
     scenarios["prev_video_engagement"] = avg_engagement
+    scenarios["prev_video_duration"] = avg_duration
     scenarios["prev_video_has_money"] = scenarios["has_money_symbol"]
 
-    return scenarios
+    # Platform encoding matching utils.features mapping
+    plat_map = {"youtube": 0, "tiktok": 1, "instagram": 2, "facebook": 3, "all": 0}
+    scenarios["platform_encoded"] = plat_map.get(str(platform).lower(), 0)
 
-def run_optimization(model, df_silver):
+    return scenarios[EXPECTED_ORDER]
+
+def run_optimization(model, df_silver, platform):
     """
     Orchestrates the simulation and returns the top 10 ranked scenarios.
     """
@@ -53,7 +59,7 @@ def run_optimization(model, df_silver):
     scenarios = generate_scenarios()
     
     # 2. Map features to model requirements
-    features = build_feature_frame(scenarios.copy(), df_silver)
+    features = build_feature_frame(scenarios.copy(), df_silver, platform)
     
     # 3. Batch Inference (Vectorized - very fast)
     scenarios["predicted_engagement"] = model.predict(features)
