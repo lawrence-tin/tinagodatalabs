@@ -48,8 +48,8 @@ def fetch_tiktok(username, access_token):
     return all_data
 
 
-def run():
-    clients = get_active_clients("tiktok")
+def run(client_id=None, brand_id=None):
+    clients = get_active_clients("tiktok", client_id=client_id, brand_id=brand_id)
 
     all_records = []
 

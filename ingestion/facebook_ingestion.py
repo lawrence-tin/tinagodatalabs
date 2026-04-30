@@ -6,24 +6,48 @@ from ingestion.config_loader import get_active_clients
 
 
 def fetch_facebook(page_id, access_token):
-    url = f"https://graph.facebook.com/v18.0/{page_id}/posts"
+    # Changed endpoint from /posts to /videos to fetch uploaded video content
+    url = f"https://graph.facebook.com/v18.0/{page_id}/videos"
 
     params = {
-        "fields": "id,message,created_time,shares,likes.summary(true),comments.summary(true)",
+        # Updated fields for video-specific data
+        "fields": "id,description,created_time,length,source,picture,likes.summary(true),comments.summary(true)",
         "access_token": access_token
     }
 
     all_data = []
-    response = requests.get(url, params=params).json()
-    all_data.extend(response.get("data", []))
+    print(f"Making initial Facebook API request to: {url} with fields: {params['fields']}")
+    response = requests.get(url, params=params)
+
+    try:
+        res_json = response.json()
+    except Exception:
+        res_json = {}
+
+    if response.status_code != 200:
+        error_msg = res_json.get("error", {}).get("message", response.text)
+        error_code = res_json.get("error", {}).get("code")
+        if error_code == 190:
+            print(f"❌ Facebook Access Token EXPIRED for Page {page_id}. Please re-link this account in Settings.")
+        else:
+            print(f"⚠️ Facebook API Error (initial request): {response.status_code} - {error_msg}")
+        return [] # Return empty list on error
+
+    all_data.extend(res_json.get("data", []))
 
     # Paginate through up to 5 pages
     for _ in range(4):
         next_url = response.get("paging", {}).get("next")
         if not next_url:
+            print("No more pages for Facebook API.")
             break
         
-        response = requests.get(next_url).json()
+        print(f"Making paginated Facebook API request to: {next_url}")
+        response = requests.get(next_url)
+        if response.status_code != 200:
+            print(f"⚠️ Facebook API Error (pagination): {response.status_code} - {response.text}")
+            break # Stop pagination on error
+        response = response.json()
         data = response.get("data", [])
         if not data:
             break
@@ -32,8 +56,8 @@ def fetch_facebook(page_id, access_token):
     return all_data
 
 
-def run():
-    clients = get_active_clients("facebook")
+def run(client_id=None, brand_id=None):
+    clients = get_active_clients("facebook", client_id=client_id, brand_id=brand_id)
 
     all_records = []
 
@@ -48,6 +72,7 @@ def run():
 
         try:
             items = fetch_facebook(page_id, access_token)
+            print(f"Fetched {len(items)} items from Facebook API for {client_id} | {brand_id}")
             for item in items:
                 all_records.append({
                     "platform": "facebook",
@@ -55,7 +80,7 @@ def run():
                     "client_id": client_id,
                     "brand_id": brand_id,
                     "platform_account_id": page_id,
-                    "source_endpoint": "facebook.posts",
+                    "source_endpoint": "facebook.videos",
                     "ingested_at": datetime.utcnow().isoformat(),
                     "raw_response": item
                 })

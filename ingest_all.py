@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def main():
-    parser = argparse.ArgumentParser(description="ContentIQ Ingestion Runner")
+    parser = argparse.ArgumentParser(description="Viralynx Ingestion Runner")
     parser.add_argument(
         "platform", 
         choices=["youtube", "facebook", "instagram", "tiktok", "all"],
