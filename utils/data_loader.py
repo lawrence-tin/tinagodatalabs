@@ -1,3 +1,9 @@
+"""
+Utility module for interacting with the Snowflake database.
+Contains functions for authentication, multi-tenant configuration management,
+and loading processed silver data for the UI.
+"""
+
 import pandas as pd
 import streamlit as st
 import bcrypt
@@ -9,6 +15,7 @@ from snowflake.connector import connect
 # SNOWFLAKE CONNECTION
 # -----------------------------
 def get_connection():
+    """Creates a raw connection to Snowflake using Streamlit secrets."""
     return connect(
         user=st.secrets["snowflake"]["user"],
         password=st.secrets["snowflake"]["password"],
@@ -177,11 +184,15 @@ def save_platform_credentials(conn, organization_id, brand_id, platform, account
 def fetch_platform_connections(conn, organization_id):
     """
     Fetches all platform connections for a given organization.
+    Uses a JOIN with BRANDS to ensure only existing brands are displayed.
     """
     query = """
-        SELECT organization_id, brand_id, platform, platform_account_id, is_active
-        FROM TEAM5PM_PRODUCT.CONFIG.CLIENT_PLATFORM_CREDENTIALS
-        WHERE organization_id = %s
+        SELECT c.organization_id, c.brand_id, c.platform, c.platform_account_id, c.is_active
+        FROM TEAM5PM_PRODUCT.CONFIG.CLIENT_PLATFORM_CREDENTIALS c
+        JOIN TEAM5PM_PRODUCT.CONFIG.BRANDS b 
+          ON c.brand_id = b.brand_id 
+          AND c.organization_id = b.organization_id
+        WHERE c.organization_id = %s
     """
     try:
         cursor = conn.cursor()
@@ -192,6 +203,44 @@ def fetch_platform_connections(conn, organization_id):
     except Exception as e:
         st.error(f"Error fetching platform connections: {e}")
         return pd.DataFrame()
+
+def delete_platform_connection(conn, organization_id, brand_id, platform):
+    """
+    Removes a platform connection from the database.
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "DELETE FROM TEAM5PM_PRODUCT.CONFIG.CLIENT_PLATFORM_CREDENTIALS WHERE organization_id = %s AND brand_id = %s AND platform = %s",
+            (organization_id, brand_id, platform)
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting connection: {e}")
+        return False
+    finally:
+        cursor.close()
+
+def update_platform_credentials(conn, organization_id, brand_id, platform, account_id, api_key):
+    """
+    Updates existing API credentials for a specific client and platform.
+    """
+    query = """
+        UPDATE TEAM5PM_PRODUCT.CONFIG.CLIENT_PLATFORM_CREDENTIALS
+        SET platform_account_id = %s, api_key = %s, access_token = %s
+        WHERE organization_id = %s AND brand_id = %s AND platform = %s
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (account_id, api_key, api_key, organization_id, brand_id, platform))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error updating credentials: {e}")
+        return False
+    finally:
+        cursor.close()
 
 def fetch_org_platform_keys(conn, organization_id, platform):
     """
