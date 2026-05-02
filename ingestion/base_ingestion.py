@@ -1,3 +1,10 @@
+"""
+Shared Ingestion Framework
+
+Provides a unified pipeline for ingesting raw JSON data into Snowflake Bronze.
+Logic flow: Fetch (Platform Script) -> Save NDJSON -> Stage in Snowflake -> COPY INTO.
+"""
+
 import snowflake.connector
 import os
 import json
@@ -58,12 +65,13 @@ def process_ingestion(platform, records):
     """
     if not records:
         print(f"⚠️ No {platform} records fetched. Skipping.")
-        return
+        return 0
 
     filename = f"{platform}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.ndjson"
     try:
         save_ndjson(records, filename)
         upload_to_snowflake(filename)
+        return len(records)
     finally:
         cleanup_file(filename)
 
@@ -71,6 +79,7 @@ def process_ingestion(platform, records):
 # SAVE NDJSON FILE
 # -------------------------------
 def save_ndjson(records, filename):
+    """Saves records as Newline-Delimited JSON, the format expected by Snowflake COPY."""
     if not records:
         raise Exception("❌ No records to save")
 
