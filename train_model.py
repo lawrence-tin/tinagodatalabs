@@ -1,3 +1,11 @@
+"""
+Model Training Pipeline
+
+Implements the hierarchical model architecture:
+1. Global Model: Fallback for all brands.
+2. Brand Models: Personalised models trained only on a specific brand's history.
+"""
+
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 import joblib

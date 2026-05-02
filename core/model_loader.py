@@ -1,3 +1,10 @@
+"""
+Model Loading Strategy
+
+Uses a waterfall logic to find the best available model for a user:
+Brand-Specific -> Global Fallback -> Legacy.
+"""
+
 import joblib
 import streamlit as st
 import os
