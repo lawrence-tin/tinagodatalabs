@@ -1,8 +1,16 @@
+"""
+Viralynx - AI Video Performance Predictor
+
+This is the main entry point for the Streamlit SaaS application. 
+It handles user authentication, multi-tenant organization/brand management,
+and provides various tools for predicting and optimizing video performance.
+"""
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 import plotly.graph_objects as go
-from utils.data_loader import get_connection, load_silver_data, authenticate_user, register_user, fetch_user_clients, create_client, save_platform_credentials, fetch_brands, create_brand, fetch_platform_connections, fetch_brand_stats, fetch_org_platform_keys
+from utils.data_loader import get_connection, load_silver_data, authenticate_user, register_user, fetch_user_clients, create_client, save_platform_credentials, fetch_brands, create_brand, fetch_platform_connections, fetch_brand_stats, fetch_org_platform_keys, delete_platform_connection, update_platform_credentials
 from core.model_loader import load_model, get_model_status
 from utils.optimizer import run_optimization
 from utils.features import build_features
@@ -72,6 +80,7 @@ if st.sidebar.button("Logout"):
 
 @st.cache_data(ttl=3600)
 def load_data(org_id, brand_id, platform):
+    """Cached wrapper for loading silver-layer data from Snowflake."""
     return load_silver_data(conn, org_id, brand_id, platform)
 
 def render_connect_platform_form(conn, org_id, brand_id, brands_list):
@@ -481,14 +490,16 @@ elif page == "⚙️ Settings":
         if df_connections.empty:
             st.info("No platforms connected yet. Use the 'Connect Platforms' tab to get started.")
         else:
-            # Enhanced layout for connected accounts
-            cols = st.columns([1.5, 1, 2.5, 2.5, 1, 1])
+            # Enhanced layout for connected accounts with Edit/Delete
+            cols = st.columns([1.2, 0.8, 2.2, 2.2, 0.6, 0.6, 0.6, 0.6])
             cols[0].write("**Brand**")
             cols[1].write("**Platform**")
             cols[2].write("**Data Status**")
             cols[3].write("**Model Status**")
             cols[4].write("**Active**")
             cols[5].write("**Sync**")
+            cols[6].write("**Edit**")
+            cols[7].write("**Del**")
 
             for i, row in df_connections.iterrows():
                 b_id = row['brand_id']
@@ -498,7 +509,7 @@ elif page == "⚙️ Settings":
                 last_sync, record_count = fetch_brand_stats(conn, org_id, b_id, plat)
                 m_status, m_time = get_model_status(b_id)
 
-                r_cols = st.columns([1.5, 1, 2.5, 2.5, 1, 1])
+                r_cols = st.columns([1.2, 0.8, 2.2, 2.2, 0.6, 0.6, 0.6, 0.6])
                 r_cols[0].write(f"**{b_id}**")
                 r_cols[1].write(row['platform'].capitalize())
                 
@@ -525,15 +536,39 @@ elif page == "⚙️ Settings":
                             
                             sync_func = ingest_map.get(row['platform'].lower())
                             if sync_func:
-                                sync_func(client_id=org_id, brand_id=row['brand_id'])
-                                process_silver.run_silver_transformation()
-                                st.cache_data.clear() # Clear dashboard cache
-                                st.success("Data successfully synced!")
+                                records_count = sync_func(client_id=org_id, brand_id=row['brand_id'])
+                                if records_count > 0:
+                                    process_silver.run_silver_transformation()
+                                    st.cache_data.clear() 
+                                    st.success(f"Successfully synced {records_count} records and updated models!")
+                                else:
+                                    st.warning("Sync completed but no new records were found. Check API permissions or Page ID.")
+                                
                                 st.rerun()
                             else:
                                 st.error(f"Sync logic for {row['platform']} not available.")
                     except Exception as e:
                         st.error(f"Sync failed: {e}")
+
+                # Edit Popover
+                with r_cols[6]:
+                    with st.popover("✏️"):
+                        st.write(f"Edit Connection: {plat} for {b_id}")
+                        new_acc_id = st.text_input("Account ID", value=row['platform_account_id'], key=f"edit_acc_{i}")
+                        new_api_key = st.text_input("New API Key", type="password", key=f"edit_key_{i}")
+                        if st.button("Save Changes", key=f"save_edit_{i}"):
+                            if update_platform_credentials(conn, org_id, b_id, plat, new_acc_id, new_api_key):
+                                st.success("Updated!")
+                                st.rerun()
+
+                # Delete Confirmation
+                with r_cols[7]:
+                    with st.popover("🗑️"):
+                        st.warning("Delete connection?")
+                        if st.button("Confirm", key=f"del_conf_{i}"):
+                            if delete_platform_connection(conn, org_id, b_id, plat):
+                                st.success("Deleted")
+                                st.rerun()
 
 # ---------------------------
 # FOOTER

@@ -102,7 +102,7 @@ def run(client_id=None, brand_id=None):
         except Exception as e:
             print(f"❌ Error fetching YouTube for {client_id}: {e}")
 
-    process_ingestion("youtube", all_records)
+    return process_ingestion("youtube", all_records)
 
 
 if __name__ == "__main__":
