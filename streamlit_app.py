@@ -178,7 +178,7 @@ user_role = next(c['role'] for c in user_orgs if c['client_id'] == org_id)
 # ---------------------------
 # NAVIGATION (Moved up to prevent blocking)
 # ---------------------------
-nav_options = ["🏠 Overview", "🎬 Predict", "🧪 Simulator", "📊 Insights", "🧠 Strategy"]
+nav_options = ["🏠 Overview", "🎬 Predict", "🧪 Simulator", "📊 Insights", "🧠 Strategy", "💎 Performance"]
 if user_role == 'admin':
     nav_options.append("⚙️ Settings")
     st.sidebar.success(f"🔓 Admin Access: {selected_org_name}")
@@ -449,6 +449,70 @@ elif page == "🧠 Strategy":
     - Titles with emotional triggers  
     - Posting between 14:00–20:00 UTC  
     """)
+
+# =========================================================
+# 💎 PERFORMANCE
+# =========================================================
+elif page == "💎 Performance":
+    st.markdown(f"## 💎 Premium Performance: {selected_brand_name}")
+    
+    # Industry Standard CPM Estimations (Heuristics for Financial Performance)
+    CPM_RATES = {
+        "youtube": 4.50,    # $4.50 per 1k views
+        "facebook": 5.20,   # $5.20 per 1k reach/views
+        "instagram": 6.10,  # $6.10 per 1k reach/views
+        "tiktok": 0.04,     # Creator fund style estimation (very low per view)
+    }
+
+    def estimate_earnings(row):
+        rate = CPM_RATES.get(row['platform'].lower(), 3.50)
+        return (row['raw_views'] / 1000.0) * rate
+
+    # Process Data
+    perf_df = df_silver.copy()
+    perf_df['est_earnings'] = perf_df.apply(estimate_earnings, axis=1)
+    
+    # KPI Summary Row
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    
+    total_v = perf_df['raw_views'].sum()
+    total_e = perf_df['total_engagement'].sum()
+    total_rev = perf_df['est_earnings'].sum()
+    avg_er = perf_df['engagement_rate_pct'].mean()
+
+    kpi1.metric("Total Reach", f"{total_v:,.0f}")
+    kpi2.metric("Total Engagement", f"{total_e:,.0f}")
+    kpi3.metric("Est. Ad Revenue", f"${total_rev:,.2f}")
+    kpi4.metric("Avg. Engagement Rate", f"{avg_er:.2f}%")
+
+    # Platform distribution chart (Only relevant if "All" platforms selected)
+    if platform == "All":
+        st.markdown("### 📊 Multi-Platform Revenue Split")
+        plat_agg = perf_df.groupby('platform')['est_earnings'].sum().reset_index()
+        fig_pie = go.Figure(data=[go.Pie(
+            labels=plat_agg['platform'].str.capitalize(), 
+            values=plat_agg['est_earnings'], 
+            hole=.4,
+            marker=dict(colors=['#FF4B4B', '#1DA1F2', '#E1306C', '#00F2EA'])
+        )])
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    # Historical Performance Table
+    st.markdown("### 🏆 Content Hall of Fame")
+    st.write("Top performing content based on your selected business metric.")
+    
+    metric_choice = st.radio("Rank by:", ["Views", "Likes", "Earnings", "Engagement"], horizontal=True)
+    sort_col = {
+        "Views": "raw_views",
+        "Likes": "raw_likes",
+        "Earnings": "est_earnings",
+        "Engagement": "engagement_rate_pct"
+    }[metric_choice]
+
+    top_10 = perf_df.sort_values(by=sort_col, ascending=False).head(10)
+    
+    display_cols = ['content_title', 'platform', 'published_at', 'raw_views', 'raw_likes', 'engagement_rate_pct', 'est_earnings']
+    st.dataframe(top_10[display_cols].rename(columns={'est_earnings': 'Est. Earnings ($)'}), use_container_width=True)
 
 # =========================================================
 # ⚙️ SETTINGS (Onboarding Flow)

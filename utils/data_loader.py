@@ -327,7 +327,7 @@ def load_silver_data(conn, organization_id=None, brand_id=None, platform=None):
     df.columns = df.columns.str.lower()
 
     # Convert numeric columns from Decimal (Snowflake default) to float for calculations
-    numeric_cols = ["engagement_rate_pct", "raw_views", "duration_seconds"]
+    numeric_cols = ["engagement_rate_pct", "raw_views", "duration_seconds", "raw_likes", "total_engagement"]
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
