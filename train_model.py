@@ -17,6 +17,9 @@ def train_model_on_dataframe(df_subset, full_context_df):
     """Helper to train a model on a specific slice of data."""
     X_list = []
     y = df_subset["engagement_rate_pct"].values
+    
+    # Sort by date to ensure features are built chronologically
+    df_subset = df_subset.sort_values("published_at")
 
     for _, row in df_subset.iterrows():
         feat_df = build_features(
