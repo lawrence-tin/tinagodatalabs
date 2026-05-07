@@ -10,21 +10,38 @@ import bcrypt
 import uuid
 from datetime import datetime
 from snowflake.connector import connect
+import os
 
 # -----------------------------
 # SNOWFLAKE CONNECTION
 # -----------------------------
 def get_connection():
-    """Creates a raw connection to Snowflake using Streamlit secrets."""
-    return connect(
-        user=st.secrets["snowflake"]["user"],
-        password=st.secrets["snowflake"]["password"],
-        account=st.secrets["snowflake"]["account"],
-        warehouse=st.secrets["snowflake"]["warehouse"],
-        database=st.secrets["snowflake"]["database"],
-        schema=st.secrets["snowflake"]["schema"],
-        role=st.secrets["snowflake"]["role"],
-    )
+    """
+    Creates a raw connection to Snowflake.
+    Tries Streamlit secrets first (UI context), then environment variables (CLI context).
+    """
+    try:
+        # Streamlit Context
+        return connect(
+            user=st.secrets["snowflake"]["user"],
+            password=st.secrets["snowflake"]["password"],
+            account=st.secrets["snowflake"]["account"],
+            warehouse=st.secrets["snowflake"]["warehouse"],
+            database=st.secrets["snowflake"]["database"],
+            schema=st.secrets["snowflake"]["schema"],
+            role=st.secrets["snowflake"]["role"],
+        )
+    except (FileNotFoundError, KeyError, RuntimeError):
+        # CLI / Ingestion Context (fallback to .env)
+        return connect(
+            user=os.getenv("SNOWFLAKE_USER"),
+            password=os.getenv("SNOWFLAKE_PASSWORD"),
+            account=os.getenv("SNOWFLAKE_ACCOUNT"),
+            warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+            database=os.getenv("SNOWFLAKE_DATABASE"),
+            schema=os.getenv("SNOWFLAKE_SCHEMA"),
+            role=os.getenv("SNOWFLAKE_ROLE")
+        )
 
 # -----------------------------
 # AUTHENTICATION FUNCTIONS

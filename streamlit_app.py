@@ -14,6 +14,7 @@ from utils.data_loader import get_connection, load_silver_data, authenticate_use
 from core.model_loader import load_model, get_model_status
 from utils.optimizer import run_optimization
 from utils.features import build_features
+from utils.repurposer import get_brand_context, generate_repurposed_variants, score_variants
 
 
 # ---------------------------
@@ -178,7 +179,7 @@ user_role = next(c['role'] for c in user_orgs if c['client_id'] == org_id)
 # ---------------------------
 # NAVIGATION (Moved up to prevent blocking)
 # ---------------------------
-nav_options = ["🏠 Overview", "🎬 Predict", "🧪 Simulator", "📊 Insights", "🧠 Strategy", "💎 Performance"]
+nav_options = ["🏠 Overview", "🎬 Predict", "✂️ Repurpose", "🧪 Simulator", "📊 Insights", "🧠 Strategy", "💎 Performance"]
 if user_role == 'admin':
     nav_options.append("⚙️ Settings")
     st.sidebar.success(f"🔓 Admin Access: {selected_org_name}")
@@ -379,6 +380,52 @@ elif page == "🎬 Predict":
 
             st.success("Ranked Videos")
         st.dataframe(df_upload, use_container_width=True)
+
+# =========================================================
+# ✂️ REPURPOSE
+# =========================================================
+elif page == "✂️ Repurpose":
+    st.markdown("## ✂️ AI Performance-Aware Repurposing")
+    st.info("Transform long-form content or ideas into optimized social assets based on your brand's history.")
+
+    source_input = st.text_area("Paste Content (Transcript, Article, or Video Script)", height=200)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        target_plats = st.multiselect("Target Platforms", ["tiktok", "youtube", "instagram", "facebook", "linkedin"], default=["tiktok", "instagram"])
+    
+    if st.button("✨ Generate Optimized Variants", use_container_width=True):
+        if not source_input:
+            st.warning("Please provide source content.")
+        else:
+            with st.spinner("Analyzing historical performance & generating variants..."):
+                # 1. Get Intelligence
+                context = get_brand_context(df_silver)
+                
+                # 2. Generate Content
+                raw_variants = generate_repurposed_variants(source_input, context, target_plats)
+                
+                # 3. Closed-loop Prediction
+                if model:
+                    final_variants = score_variants(raw_variants, model, df_silver)
+                else:
+                    final_variants = raw_variants
+
+                st.success(f"Generated {len(final_variants)} performance-aware variants!")
+                
+                for v in final_variants:
+                    with st.expander(f"📱 {v['platform'].upper()} Variant"):
+                        c1, c2 = st.columns([3, 1])
+                        c1.write(v['content'])
+                        
+                        score = v.get('predicted_engagement', 0)
+                        avg_er = df_silver['engagement_rate_pct'].mean()
+                        delta = score - avg_er
+                        
+                        c2.metric("Predicted ER", f"{score:.2f}%", f"{delta:+.2f}% vs Avg")
+                        st.caption(f"Suggested Length: {v['suggested_duration_seconds']}s")
+                        if st.button("Copy to Clipboard", key=f"copy_{v['platform']}"):
+                            st.toast("Copied!")
 
 # =========================================================
 # 🧪 SIMULATOR
