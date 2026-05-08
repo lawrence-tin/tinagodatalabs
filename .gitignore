@@ -1,3 +1,8 @@
 .streamlit\secrets.toml
 .env
 .venv
+credentials.json
+exchange_tiktok_token.py
+test_tiktok.py
+test_tiktok_oauth.py
+decode.py

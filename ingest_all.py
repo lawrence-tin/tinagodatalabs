@@ -26,8 +26,8 @@ def main():
         os.environ["INGESTION_DRY_RUN"] = "True"
         print("🧪 RUNNING IN DRY-RUN MODE: Snowflake upload will be skipped.")
 
-    # 2. Import platform modules AFTER environment is setup
-    from ingestion import youtube_ingestion, facebook_ingestion, instagram_ingestion, tiktok_ingestion, process_silver
+    # 2. Import platform modules AFTER environment is set up
+    from ingestion import youtube_ingestion, facebook_ingestion, instagram_ingestion, tiktok_ingestion, process_silver #
 
     ingestors = {
         "youtube": youtube_ingestion.run,
