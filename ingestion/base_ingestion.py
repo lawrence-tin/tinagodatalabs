@@ -44,7 +44,17 @@ def get_config(key):
     # 2. Check Streamlit Secrets (Cloud context)
     try:
         import streamlit as st
-        return st.secrets.get(key)
+        # Try root level (e.g., st.secrets["snowflake_account"])
+        if key in st.secrets:
+            return st.secrets[key]
+        
+        # Try nested level (e.g., st.secrets["snowflake"]["account"])
+        if key.startswith("snowflake_"):
+            sub_key = key.replace("snowflake_", "")
+            if "snowflake" in st.secrets and sub_key in st.secrets["snowflake"]:
+                return st.secrets["snowflake"][sub_key]
+        
+        return None
     except:
         return None
 
