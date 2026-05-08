@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 from utils.data_loader import get_connection, load_silver_data, authenticate_user, register_user, fetch_user_clients, create_client, save_platform_credentials, fetch_brands, create_brand, fetch_platform_connections, fetch_brand_stats, fetch_org_platform_keys, delete_platform_connection, update_platform_credentials
 from core.model_loader import load_model, get_model_status
 from utils.optimizer import run_optimization
-from utils.features import build_features
+from utils.features import build_features, extract_title_features
 from utils.repurposer import get_brand_context, generate_repurposed_variants, score_variants
 
 
@@ -267,10 +267,12 @@ elif page == "🎬 Predict":
     with col1:
         title = st.text_input("Video Title")
         duration = st.slider("Duration (seconds)", 30, 1800, 480)
+        tags = st.text_input("Tags / Hashtags (comma separated)", placeholder="e.g. tech, viral, tutorial")
 
     with col2:
         hour = st.selectbox("Upload Hour (UTC)", list(range(24)), index=17)
         weekend = st.checkbox("Weekend upload")
+        category = st.selectbox("Content Category", ["Entertainment", "Education", "Vlog", "News", "Other"])
         st.info("💡 Pro-tip: Features like '$', '?', and numbers are automatically detected from the title you type.")
 
     st.markdown("---")
@@ -289,7 +291,9 @@ elif page == "🎬 Predict":
                 hour=hour,
                 weekend=weekend,
                 df_silver=df_silver,
-                platform_name=platform
+                platform_name=platform,
+                tags=tags,
+                category=category
             )
 
             prediction = float(model.predict(input_data)[0])
@@ -324,7 +328,7 @@ elif page == "🎬 Predict":
         if model is None:
             st.error("❌ Cannot run optimization without a trained model.")
         else:
-            results = run_optimization(model, df_silver, platform)
+            results = run_optimization(model, df_silver, platform, category=category, tags=tags, current_title=title)
             
             st.success("Top 3 Optimized Scenarios Found")
             
@@ -365,11 +369,13 @@ elif page == "🎬 Predict":
 
                 input_data = build_features(
                     duration=row["duration_seconds"],
-                    title=str(row["title"]),
-                    hour=int(row["hour"]),
-                    weekend=False,
+                    title=str(row.get("title", "")),
+                    hour=int(row.get("hour", 17)),
+                    weekend=row.get("is_weekend", False),
                     df_silver=df_silver,
-                    platform_name=platform
+                    platform_name=platform,
+                    tags=str(row.get("tags", "")),
+                    category=row.get("category", "Other")
                 )
 
                 score = float(model.predict(input_data)[0])
@@ -379,13 +385,51 @@ elif page == "🎬 Predict":
             df_upload = df_upload.sort_values("predicted_engagement", ascending=False)
 
             st.success("Ranked Videos")
-        st.dataframe(df_upload, use_container_width=True)
+            st.markdown("---")
+            st.dataframe(df_upload, width='stretch')
+
+            # ---------------------------
+            # BULK OPTIMIZATION FOR CSV
+            # ---------------------------
+            st.markdown("---")
+            st.subheader("✨ Bulk Optimization for Uploaded Videos")
+            if st.button("🚀 Run Bulk Optimization", use_container_width=True):
+                optimized_results = []
+                progress_text = "Optimizing video ideas. Please wait."
+                my_bar = st.progress(0, text=progress_text)
+                
+                for i, row in df_upload.iterrows():
+                    # Run optimization for each video idea from the CSV
+                    optimized_scenario = run_optimization(
+                        model, 
+                        df_silver, 
+                        platform, 
+                        category=str(row.get("category", "Other")), 
+                        tags=str(row.get("tags", "")),
+                        current_title=str(row.get("title", ""))
+                    ).iloc[0] # Take the top optimized scenario
+
+                    optimized_results.append({
+                        "Original Title": row.get("title", ""),
+                        "Original Predicted ER": row.get("predicted_engagement", 0),
+                        "Optimized Predicted ER": optimized_scenario["predicted_engagement"],
+                        "Optimized Duration (s)": optimized_scenario["duration_seconds"],
+                        "Optimized Hour (UTC)": optimized_scenario["publish_hour_utc"],
+                        "Optimized Has Money": bool(optimized_scenario["has_money_symbol"]),
+                        "Optimized Has Question": bool(optimized_scenario["has_question_mark"]),
+                        "Optimized Has Numbers": bool(optimized_scenario["has_numbers"]),
+                    })
+                    my_bar.progress((i + 1) / len(df_upload), text=progress_text)
+                
+                st.success("Bulk Optimization Complete!")
+                st.dataframe(pd.DataFrame(optimized_results), width='stretch')
 
 # =========================================================
 # ✂️ REPURPOSE
 # =========================================================
 elif page == "✂️ Repurpose":
     st.markdown("## ✂️ AI Performance-Aware Repurposing")
+
     st.info("Transform long-form content or ideas into optimized social assets based on your brand's history.")
 
     source_input = st.text_area("Paste Content (Transcript, Article, or Video Script)", height=200)
@@ -434,11 +478,11 @@ elif page == "🧪 Simulator":
 
     st.markdown("## 🧪 What-If Simulator")
 
-    def predict_custom(d, t, h, w, p):
+    def predict_custom(d, t, h, w, p, tags="", cat="Other"):
         if model is None:
             return 0.0
         else:
-            input_data = build_features(d, t, h, w, df_silver, p)
+            input_data = build_features(d, t, h, w, df_silver, p, tags=tags, category=cat)
             return float(model.predict(input_data)[0])
 
     col1, col2 = st.columns(2)
@@ -447,18 +491,22 @@ elif page == "🧪 Simulator":
         base_title = st.text_input("Base Title", key="base_title")
         base_duration = st.slider("Base Duration", 30, 1800, 480, key="base_duration")
         base_hour = st.selectbox("Base Hour", list(range(24)), index=17, key="base_hour")
+        base_tags = st.text_input("Base Tags", key="base_tags")
+        base_cat = st.selectbox("Base Category", ["Entertainment", "Education", "Vlog", "News", "Other"], key="base_cat")
 
     with col2:
         new_title = st.text_input("New Title", key="new_title")
         new_duration = st.slider("New Duration", 30, 1800, base_duration, key="new_duration")
         new_hour = st.selectbox("New Hour", list(range(24)), index=base_hour, key="new_hour")
+        new_tags = st.text_input("New Tags", key="new_tags")
+        new_cat = st.selectbox("New Category", ["Entertainment", "Education", "Vlog", "News", "Other"], index=0, key="new_cat")
 
-    if st.button("Run Simulation", use_container_width=True):
+    if st.button("Run Simulation", width='stretch'):
         if model is None:
             st.error("❌ Model not loaded. Simulation cannot run.")
         else:
-            base_score = predict_custom(base_duration, base_title, base_hour, False, platform)
-            scenario_score = predict_custom(new_duration, new_title, new_hour, False, platform)
+            base_score = predict_custom(base_duration, base_title, base_hour, False, platform, base_tags, base_cat)
+            scenario_score = predict_custom(new_duration, new_title, new_hour, False, platform, new_tags, new_cat)
 
             delta = scenario_score - base_score
 
@@ -471,7 +519,7 @@ elif page == "🧪 Simulator":
         fig.add_trace(go.Bar(name="Base", x=["Engagement"], y=[base_score]))
         fig.add_trace(go.Bar(name="Scenario", x=["Engagement"], y=[scenario_score]))
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 # =========================================================
 # 📊 INSIGHTS
@@ -479,23 +527,116 @@ elif page == "🧪 Simulator":
 elif page == "📊 Insights":
 
     st.markdown("## 📊 Historical Insights")
+    st.write("Understand the patterns behind your high-performing content.")
 
-    st.bar_chart(df_silver.groupby("duration_seconds")["engagement_rate_pct"].mean())
-    st.line_chart(df_silver.groupby(df_silver["published_at"].dt.month)["engagement_rate_pct"].mean())
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Engagement by Duration")
+        # Grouping by 1-minute buckets for better readability than raw seconds
+        df_duration = df_silver.copy()
+        df_duration['duration_min'] = (df_duration['duration_seconds'] // 60).astype(int)
+        duration_stats = df_duration.groupby("duration_min")["engagement_rate_pct"].mean()
+        st.bar_chart(duration_stats)
+        st.caption("Average engagement rate grouped by video length (minutes).")
+
+    with col2:
+        st.subheader("Monthly Performance Trend")
+        monthly_trend = df_silver.groupby(df_silver["published_at"].dt.to_period("M"))["engagement_rate_pct"].mean()
+        # Convert index back to string for streamlit charting
+        monthly_trend.index = monthly_trend.index.astype(str)
+        st.line_chart(monthly_trend)
+        st.caption("How your average engagement has evolved month-over-month.")
+
+    st.markdown("---")
+    col3, col4 = st.columns(2)
+
+    with col3:
+        st.subheader("Performance by Category")
+        if 'category' in df_silver.columns:
+            cat_perf = df_silver.groupby("category")["engagement_rate_pct"].mean().sort_values(ascending=False)
+            st.bar_chart(cat_perf)
+        else:
+            st.info("Category data not available for this brand.")
+
+    with col4:
+        st.subheader("Best Time to Post (Historical)")
+        df_silver['hour'] = df_silver['published_at'].dt.hour
+        hour_perf = df_silver.groupby("hour")["engagement_rate_pct"].mean()
+        st.line_chart(hour_perf)
+        st.caption("Average engagement based on the hour of the day (UTC).")
 
 # =========================================================
 # 🧠 STRATEGY
 # =========================================================
 elif page == "🧠 Strategy":
 
-    st.markdown("## 🧠 Content Strategy")
+    st.markdown("## 🧠 Data-Driven Content Strategy")
+    st.write(f"Tailored recommendations for **{selected_brand_name}** on **{platform.capitalize()}** based on historical performance.")
 
-    st.markdown("""
-    ### 🔥 What works best:
-    - Videos between 5–10 minutes  
-    - Titles with emotional triggers  
-    - Posting between 14:00–20:00 UTC  
-    """)
+    # Define 'Success' as the top 20% of engagement
+    threshold = df_silver['engagement_rate_pct'].quantile(0.8)
+    success_df = df_silver[df_silver['engagement_rate_pct'] >= threshold].copy()
+
+    if success_df.empty:
+        st.warning("Not enough high-performing data points to generate a strategy yet. Keep publishing!")
+    else:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("⏰ Timing & Duration")
+            
+            # Best Hour (Mode of successful posts)
+            success_df['hour'] = success_df['published_at'].dt.hour
+            best_hour = success_df['hour'].mode()[0]
+            
+            # Optimal Duration
+            avg_success_dur = success_df['duration_seconds'].mean()
+            
+            st.write(f"✅ **Best Posting Hour:** {int(best_hour)}:00 UTC")
+            st.write(f"✅ **Optimal Duration:** ~{int(avg_success_dur/60)} minutes")
+            
+            # Weekend vs Weekday
+            success_df['is_weekend'] = success_df['published_at'].dt.weekday >= 5
+            weekend_pref = "Weekends" if success_df['is_weekend'].mean() > 0.5 else "Weekdays"
+            st.write(f"✅ **Audience Preference:** {weekend_pref}")
+
+        with col2:
+            st.subheader("✍️ Title & Content Hooks")
+            
+            # Analyze hooks in successful titles using our feature extractor
+            hook_stats = success_df['content_title'].apply(lambda x: extract_title_features(str(x))).apply(pd.Series)
+            
+            money_rate = hook_stats['has_money_symbol'].mean() * 100
+            question_rate = hook_stats['has_question_mark'].mean() * 100
+            number_rate = hook_stats['has_numbers'].mean() * 100
+            
+            st.write(f"💰 **Money Symbols:** Found in {money_rate:.0f}% of top videos")
+            st.write(f"❓ **Question Marks:** Found in {question_rate:.0f}% of top videos")
+            st.write(f"🔢 **Numbers/Lists:** Found in {number_rate:.0f}% of top videos")
+
+        st.markdown("---")
+        
+        st.subheader("🎯 Strategic Advisor")
+        
+        recs = []
+        # Hook recommendation
+        if money_rate > 30:
+            recs.append("Your audience responds strongly to financial value or 'price' hooks ($).")
+        if question_rate > 40:
+            recs.append("Interactive titles (using question marks) are key to your engagement.")
+        
+        # Length recommendation
+        if avg_success_dur < 300:
+            recs.append("Focus on high-impact Short-Form content (under 5 mins).")
+        elif avg_success_dur > 900:
+            recs.append("Your audience values depth; prioritize Long-Form storytelling (15+ mins).")
+
+        if not recs:
+            recs.append("Maintain consistent quality; no outlier patterns detected yet.")
+
+        for r in recs:
+            st.markdown(f"- {r}")
 
 # =========================================================
 # 💎 PERFORMANCE
@@ -533,8 +674,34 @@ elif page == "💎 Performance":
     kpi4.metric("Avg. Engagement Rate", f"{avg_er:.2f}%")
 
     # Platform distribution chart (Only relevant if "All" platforms selected)
+    # Platform distribution and trend charts
+    st.markdown("### 📊 Financial Insights")
+    
+    col_rev, col_eff = st.columns(2)
+    
+    with col_rev:
+        st.subheader("Revenue Trend")
+        rev_trend_df = perf_df.copy()
+        rev_trend_df['month'] = rev_trend_df['published_at'].dt.to_period('M').astype(str)
+        rev_monthly = rev_trend_df.groupby('month')['est_earnings'].sum()
+        st.line_chart(rev_monthly)
+        st.caption("Estimated monthly ad revenue based on views and platform CPMs.")
+
+    with col_eff:
+        st.subheader("Platform Efficiency ($ per Engagement)")
+        # Calculate revenue generated per engagement point
+        eff_agg = perf_df.groupby('platform').agg({
+            'est_earnings': 'sum',
+            'total_engagement': 'sum'
+        }).reset_index()
+        eff_agg['efficiency'] = eff_agg['est_earnings'] / eff_agg['total_engagement'].replace(0, 1)
+        st.bar_chart(eff_agg.set_index('platform')['efficiency'])
+        st.caption("Which platform provides the highest monetary return per interaction?")
+
     if platform == "All":
         st.markdown("### 📊 Multi-Platform Revenue Split")
+        st.markdown("---")
+        st.subheader("🌍 Multi-Platform Revenue Split")
         plat_agg = perf_df.groupby('platform')['est_earnings'].sum().reset_index()
         fig_pie = go.Figure(data=[go.Pie(
             labels=plat_agg['platform'].str.capitalize(), 
@@ -542,7 +709,7 @@ elif page == "💎 Performance":
             hole=.4,
             marker=dict(colors=['#FF4B4B', '#1DA1F2', '#E1306C', '#00F2EA'])
         )])
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width='stretch')
 
     # Historical Performance Table
     st.markdown("### 🏆 Content Hall of Fame")
@@ -559,7 +726,7 @@ elif page == "💎 Performance":
     top_10 = perf_df.sort_values(by=sort_col, ascending=False).head(10)
     
     display_cols = ['content_title', 'platform', 'published_at', 'raw_views', 'raw_likes', 'engagement_rate_pct', 'est_earnings']
-    st.dataframe(top_10[display_cols].rename(columns={'est_earnings': 'Est. Earnings ($)'}), use_container_width=True)
+    st.dataframe(top_10[display_cols].rename(columns={'est_earnings': 'Est. Earnings ($)'}), width='stretch')
 
 # =========================================================
 # ⚙️ SETTINGS (Onboarding Flow)
