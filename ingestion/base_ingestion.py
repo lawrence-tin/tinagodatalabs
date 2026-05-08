@@ -35,13 +35,26 @@ ENV_VAR_MAPPING = {
     "role": "snowflake_role"
 }
 
+def get_config(key):
+    """Hybrid loader: checks OS environment then Streamlit secrets."""
+    # 1. Check OS (Local .env or System Vars)
+    val = os.getenv(key)
+    if val:
+        return val
+    # 2. Check Streamlit Secrets (Cloud context)
+    try:
+        import streamlit as st
+        return st.secrets.get(key)
+    except:
+        return None
+
 SNOWFLAKE_CONFIG = {
-    "account": os.getenv("snowflake_account"),
-    "user": os.getenv("snowflake_user"),
-    "password": os.getenv("snowflake_password"),
-    "warehouse": os.getenv("snowflake_warehouse"),
-    "database": os.getenv("snowflake_database"),
-    "schema": os.getenv("snowflake_schema"),
+    "account": get_config("snowflake_account"),
+    "user": get_config("snowflake_user"),
+    "password": get_config("snowflake_password"),
+    "warehouse": get_config("snowflake_warehouse"),
+    "database": get_config("snowflake_database"),
+    "schema": get_config("snowflake_schema"),
 }
 
 print(f"📡 Loaded Snowflake Account: {SNOWFLAKE_CONFIG['account']}")

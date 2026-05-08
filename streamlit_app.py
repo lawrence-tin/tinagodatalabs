@@ -632,7 +632,7 @@ elif page == "⚙️ Settings":
 
                 r_cols[4].write("✅" if row['is_active'] else "❌")
                 
-                if r_cols[5].button("🔄", key=f"sync_btn_{i}_{b_id}"):
+                if r_cols[5].button("🔄", key=f"sync_btn_{i}_{b_id}_{plat}"):
                     try:
                         with st.spinner(f"Syncing {row['brand_id']}..."):
                             # Dynamic imports to load ingestion engine and process
