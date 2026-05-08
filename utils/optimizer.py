@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from itertools import product
-from utils.features import EXPECTED_ORDER
+from utils.features import EXPECTED_ORDER, extract_title_features
 
 def generate_scenarios():
     """
@@ -23,7 +23,7 @@ def generate_scenarios():
         "has_numbers"
     ])
 
-def build_feature_frame(scenarios, df_silver, platform):
+def build_feature_frame(scenarios, df_silver, platform, category="Other", tags="", current_title=""):
     """
     Prepares the full feature set required by the model using silver data averages.
     """
@@ -35,7 +35,12 @@ def build_feature_frame(scenarios, df_silver, platform):
     # Static/Inferred features
     scenarios["title_length"] = 10
     scenarios["is_weekend"] = 0
-    
+
+    # If a current_title is provided, use its extracted features as a baseline
+    # The optimizer will still explore variations of has_money_symbol, etc.
+    title_feats = extract_title_features(current_title)
+    scenarios["title_length"] = title_feats["title_length"] # Use actual title length
+
     # History-based features (Contextual scaling)
     scenarios["rolling_avg_views_5"] = avg_views
     scenarios["rolling_avg_engagement_5"] = avg_engagement
@@ -49,9 +54,14 @@ def build_feature_frame(scenarios, df_silver, platform):
     plat_map = {"youtube": 0, "tiktok": 1, "instagram": 2, "facebook": 3, "all": 0}
     scenarios["platform_encoded"] = plat_map.get(str(platform).lower(), 0)
 
+    # Contextual features from current session
+    cat_map = {"Entertainment": 0, "Education": 1, "Vlog": 2, "News": 3, "Other": 4}
+    scenarios["category_encoded"] = cat_map.get(category, 4)
+    scenarios["tag_count"] = len([t for t in tags.split(",") if t.strip()])
+
     return scenarios[EXPECTED_ORDER]
 
-def run_optimization(model, df_silver, platform):
+def run_optimization(model, df_silver, platform, category="Other", tags="", current_title=""):
     """
     Orchestrates the simulation and returns the top 10 ranked scenarios.
     """
@@ -59,7 +69,7 @@ def run_optimization(model, df_silver, platform):
     scenarios = generate_scenarios()
     
     # 2. Map features to model requirements
-    features = build_feature_frame(scenarios.copy(), df_silver, platform)
+    features = build_feature_frame(scenarios.copy(), df_silver, platform, category, tags, current_title)
     
     # 3. Batch Inference (Vectorized - very fast)
     scenarios["predicted_engagement"] = model.predict(features)

@@ -28,7 +28,9 @@ def train_model_on_dataframe(df_subset, full_context_df):
             hour=row["published_at"].hour,
             weekend=(row["published_at"].weekday() >= 5),
             df_silver=full_context_df[full_context_df['published_at'] < row['published_at']],
-            platform_name=row["platform"]
+            platform_name=row["platform"],
+            tags=str(row.get("tags", "")),
+            category=row.get("category", "Other")
         )
         X_list.append(feat_df)
 

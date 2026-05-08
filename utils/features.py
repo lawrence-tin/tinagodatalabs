@@ -19,7 +19,9 @@ EXPECTED_ORDER = [
     "prev_video_views",
     "prev_video_engagement",
     "prev_video_duration",
-    "prev_video_has_money"
+    "prev_video_has_money",
+    "tag_count",
+    "category_encoded"
 ]
 
 def extract_title_features(title: str):
@@ -57,7 +59,7 @@ def extract_context_features(df_silver: pd.DataFrame):
         "prev_video_has_money": int("$" in str(prev.get("content_title", ""))),
     }
 
-def build_features(duration, title, hour, weekend, df_silver, platform_name):
+def build_features(duration, title, hour, weekend, df_silver, platform_name, tags="", category="Other"):
     """
     Standardized feature builder for both training and prediction.
     """
@@ -67,11 +69,16 @@ def build_features(duration, title, hour, weekend, df_silver, platform_name):
     # Platform encoding matching train_model.py
     plat_map = {"youtube": 0, "tiktok": 1, "instagram": 2, "facebook": 3, "all": 0}
     features["platform_encoded"] = plat_map.get(str(platform_name).lower(), 0)
+    
+    # Category encoding
+    cat_map = {"Entertainment": 0, "Education": 1, "Vlog": 2, "News": 3, "Other": 4}
+    features["category_encoded"] = cat_map.get(category, 4)
 
     # Extract components
     features.update(extract_title_features(title))
     features.update(extract_time_features(hour, weekend))
     features.update(extract_context_features(df_silver))
+    features["tag_count"] = len([t for t in tags.split(",") if t.strip()])
 
     # Ensure correct column order and type
     df_out = pd.DataFrame([features])
