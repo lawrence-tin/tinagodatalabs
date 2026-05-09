@@ -137,7 +137,8 @@ def create_client(conn, user_id, client_name):
     """
     Creates a new client in the CONFIG.CLIENTS table and links it to the user.
     """
-    client_id = client_name.lower().replace(" ", "_")
+    unique_suffix = str(uuid.uuid4())[:4]
+    client_id = f"{client_name.lower().replace(' ', '_')}_{unique_suffix}"
     cursor = conn.cursor()
     try:
         # 1. Insert the new client
