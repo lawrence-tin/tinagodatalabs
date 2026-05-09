@@ -118,7 +118,11 @@ def render_connect_platform_form(conn, org_id, brand_id, brands_list):
         api_key = st.text_input("API Key / Access Token", type="password", key="settings_api_key")
     
     if st.button("Link Platform", key="settings_link_button"):
-        if account_id and api_key and selected_brand_to_link:
+        # TikTok ingestion (current MVP) uses Apify and reads APIFY_TOKEN globally,
+        # so the per-account API Key can be left empty.
+        require_api_key = str(target_platform).lower() != "tiktok"
+
+        if account_id and selected_brand_to_link and (api_key or not require_api_key):
             success = save_platform_credentials(
                 conn, 
                 org_id,
@@ -131,7 +135,10 @@ def render_connect_platform_form(conn, org_id, brand_id, brands_list):
                 st.success(f"Successfully linked {target_platform} to {selected_brand_to_link}! Data ingestion will begin soon.")
                 st.rerun()
         else:
-            st.error("Please fill in all fields.")
+            if require_api_key:
+                st.error("Please fill in all fields (API Key is required for this platform).")
+            else:
+                st.error("Please fill in all required fields.")
 
 # ---------------------------
 # SAAS: ORGANIZATION & BRAND SELECTION
@@ -958,13 +965,13 @@ elif page == "⚙️ Settings":
                     try:
                         with st.spinner(f"Syncing {row['brand_id']}..."):
                             # Dynamic imports to load ingestion engine and process
-                            from ingestion import youtube_ingestion, facebook_ingestion, instagram_ingestion, tiktok_ingestion, process_silver
+                            from ingestion import youtube_ingestion, facebook_ingestion, instagram_ingestion, tiktok_scraper_ingestion, process_silver
                             
                             ingest_map = {
                                 "youtube": youtube_ingestion.run,
                                 "facebook": facebook_ingestion.run,
                                 "instagram": instagram_ingestion.run,
-                                "tiktok": tiktok_ingestion.run
+                                "tiktok": tiktok_scraper_ingestion.run
                             }
                             
                             sync_func = ingest_map.get(row['platform'].lower())
