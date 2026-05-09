@@ -25,7 +25,12 @@ EXPECTED_ORDER = [
 ]
 
 def extract_title_features(title: str):
-    title = title or ""
+    # Snowflake/pandas can yield NaN (float) for missing text fields.
+    # Coerce to string safely so len()/regex won't crash.
+    if title is None:
+        title = ""
+    else:
+        title = str(title)
     return {
         "title_length": len(title),
         "has_money_symbol": int("$" in title),
