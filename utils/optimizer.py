@@ -64,15 +64,39 @@ def build_feature_frame(scenarios, df_silver, platform, category="Other", tags="
 def run_optimization(model, df_silver, platform, category="Other", tags="", current_title=""):
     """
     Orchestrates the simulation and returns the top 10 ranked scenarios.
+
+    Important: we enforce some duration diversity so the UI doesn't show
+    the same duration for all options when the model ranking degenerates.
     """
-    # 1. Generate grid
     scenarios = generate_scenarios()
-    
-    # 2. Map features to model requirements
+
     features = build_feature_frame(scenarios.copy(), df_silver, platform, category, tags, current_title)
-    
-    # 3. Batch Inference (Vectorized - very fast)
+
     scenarios["predicted_engagement"] = model.predict(features)
-    
-    # 4. Rank and return
-    return scenarios.sort_values("predicted_engagement", ascending=False).head(10)
+
+    ranked = scenarios.sort_values("predicted_engagement", ascending=False)
+
+    # Pick top results with unique durations first, then fill remainder.
+    target_rows = 10
+    picked = []
+    seen_durations = set()
+
+    for _, row in ranked.iterrows():
+        dur = int(row["duration_seconds"])
+        if dur not in seen_durations:
+            picked.append(row)
+            seen_durations.add(dur)
+        if len(picked) >= min(target_rows, len(seen_durations)):
+            # If we already collected enough diverse durations, we can stop early.
+            if len(picked) >= 10:
+                break
+
+    # If we didn't reach target_rows (e.g., very small grid), fill with next best.
+    if len(picked) < target_rows:
+        for _, row in ranked.iterrows():
+            picked.append(row)
+            if len(picked) >= target_rows:
+                break
+
+    out = pd.DataFrame(picked).drop_duplicates(subset=["duration_seconds", "publish_hour_utc", "has_money_symbol", "has_question_mark", "has_numbers"], keep="first")
+    return out.head(target_rows)
