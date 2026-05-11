@@ -121,6 +121,9 @@ def render_connect_platform_form(conn, org_id, brand_id, brands_list):
         # TikTok ingestion (current MVP) uses Apify and reads APIFY_TOKEN globally,
         # so the per-account API Key can be left empty.
         require_api_key = str(target_platform).lower() != "tiktok"
+        # TikTok and Facebook ingestion use Apify and read APIFY_TOKEN globally,
+        # so the per-brand API Key can be left empty.
+        require_api_key = str(target_platform).lower() not in ["tiktok", "facebook"]
 
         if account_id and selected_brand_to_link and (api_key or not require_api_key):
             success = save_platform_credentials(
@@ -544,6 +547,14 @@ elif page == "📊 Insights":
         # Grouping by 1-minute buckets for better readability than raw seconds
         df_duration = df_silver.copy()
         df_duration['duration_min'] = (df_duration['duration_seconds'] // 60).astype(int)
+        # Filter out records with missing or non-finite duration to prevent casting errors
+        # Grouping by 1-minute buckets for better readability
+        # Filter out records with missing or non-finite duration_seconds
+        df_duration = df_silver.dropna(subset=['duration_seconds']).copy()
+        # Filter out infinite values and use nullable integer type 'Int64' to handle potential NAs
+        # Explicitly filter out infinite values before casting
+        df_duration = df_duration[df_duration['duration_seconds'].abs() != float('inf')]
+        df_duration['duration_min'] = (df_duration['duration_seconds'] // 60).astype('Int64')
         duration_stats = df_duration.groupby("duration_min")["engagement_rate_pct"].mean()
         st.bar_chart(duration_stats)
         st.caption("Average engagement rate grouped by video length (minutes).")
@@ -664,6 +675,10 @@ elif page == "🧠 Strategy":
             
             st.write(f"✅ **Best Posting Hour:** {int(best_hour)}:00 UTC")
             st.write(f"✅ **Optimal Duration:** ~{int(avg_success_dur/60)} minutes")
+            if not pd.isna(avg_success_dur):
+                st.write(f"✅ **Optimal Duration:** ~{int(avg_success_dur/60)} minutes")
+            else:
+                st.write(f"✅ **Optimal Duration:** N/A (Missing duration data)")
             
             # Weekend vs Weekday
             success_df['is_weekend'] = success_df['published_at'].dt.weekday >= 5
@@ -966,10 +981,12 @@ elif page == "⚙️ Settings":
                         with st.spinner(f"Syncing {row['brand_id']}..."):
                             # Dynamic imports to load ingestion engine and process
                             from ingestion import youtube_ingestion, facebook_ingestion, instagram_ingestion, tiktok_scraper_ingestion, process_silver
+                            import facebook_scraper
                             
                             ingest_map = {
                                 "youtube": youtube_ingestion.run,
                                 "facebook": facebook_ingestion.run,
+                                "facebook": facebook_scraper.run,
                                 "instagram": instagram_ingestion.run,
                                 "tiktok": tiktok_scraper_ingestion.run
                             }
