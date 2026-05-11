@@ -544,16 +544,12 @@ elif page == "📊 Insights":
 
     with col1:
         st.subheader("Engagement by Duration")
-        # Grouping by 1-minute buckets for better readability than raw seconds
-        df_duration = df_silver.copy()
-        df_duration['duration_min'] = (df_duration['duration_seconds'] // 60).astype(int)
-        # Filter out records with missing or non-finite duration to prevent casting errors
         # Grouping by 1-minute buckets for better readability
         # Filter out records with missing or non-finite duration_seconds
         df_duration = df_silver.dropna(subset=['duration_seconds']).copy()
-        # Filter out infinite values and use nullable integer type 'Int64' to handle potential NAs
         # Explicitly filter out infinite values before casting
         df_duration = df_duration[df_duration['duration_seconds'].abs() != float('inf')]
+        # Use nullable integer type 'Int64' to handle potential NAs gracefully
         df_duration['duration_min'] = (df_duration['duration_seconds'] // 60).astype('Int64')
         duration_stats = df_duration.groupby("duration_min")["engagement_rate_pct"].mean()
         st.bar_chart(duration_stats)
@@ -983,7 +979,7 @@ elif page == "⚙️ Settings":
                     try:
                         with st.spinner(f"Syncing {row['brand_id']}..."):
                             # Dynamic imports to load ingestion engine and process
-                            from ingestion import youtube_ingestion, facebook_ingestion, instagram_ingestion, tiktok_scraper_ingestion, process_silver
+                            from ingestion import youtube_ingestion, facebook_ingestion, instagram_ingestion, tiktok_scraper_ingestion, process_silver, process_gold
                             import facebook_scraper
                             
                             ingest_map = {
@@ -998,6 +994,7 @@ elif page == "⚙️ Settings":
                                 records_count = sync_func(client_id=org_id, brand_id=row['brand_id'])
                                 if records_count > 0:
                                     process_silver.run_silver_transformation()
+                                    process_gold.run_gold_transformation() # Add this line to update Gold layer
                                     st.cache_data.clear() 
                                     st.success(f"Successfully synced {records_count} records and updated models!")
                                 else:

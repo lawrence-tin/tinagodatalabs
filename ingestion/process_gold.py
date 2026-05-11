@@ -10,6 +10,10 @@ def run_gold_transformation():
     cursor = conn.cursor()
 
     try:
+        # 0. Ensure Gold Schema exists
+        print("📁 Ensuring Gold Schema exists...")
+        cursor.execute("CREATE SCHEMA IF NOT EXISTS TEAM5PM_PRODUCT.GOLD")
+
         # 1. Create Heatmap & Time Insights (Speeds up 'Insights' and 'Strategy' tabs)
         print("🔥 Pre-calculating Brand Insights...")
         cursor.execute("""
