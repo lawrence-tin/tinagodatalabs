@@ -11,7 +11,7 @@ import pandas as pd
 import io
 from datetime import datetime
 import plotly.graph_objects as go
-from utils.data_loader import get_connection, load_silver_data, authenticate_user, register_user, fetch_user_clients, create_client, save_platform_credentials, fetch_brands, create_brand, fetch_platform_connections, fetch_brand_stats, fetch_org_platform_keys, delete_platform_connection, update_platform_credentials
+from utils.data_loader import get_connection, load_silver_data, authenticate_user, register_user, fetch_user_clients, create_client, save_platform_credentials, fetch_brands, create_brand, fetch_platform_connections, fetch_brand_stats, fetch_org_platform_keys, delete_platform_connection, update_platform_credentials, load_gold_insights
 from core.model_loader import load_model, get_model_status
 from utils.optimizer import run_optimization
 from utils.features import build_features, extract_title_features
@@ -184,6 +184,11 @@ brand_options["All Brands"] = "All"
 selected_brand_name = st.sidebar.selectbox("Select Brand", list(brand_options.keys()))
 brand_id = brand_options[selected_brand_name]
 
+platform = st.sidebar.selectbox(
+    "Platform",
+    ["All", "youtube", "tiktok", "instagram", "facebook"] # Keep "All" for platform filtering
+)
+
 # Get the user's role for the currently selected client
 user_role = next(c['role'] for c in user_orgs if c['client_id'] == org_id)
 
@@ -215,11 +220,6 @@ if not brand_has_connection and page != "⚙️ Settings":
     st.write("To start ingesting data and getting predictions, connect a social media platform.")
     render_connect_platform_form(conn, org_id, brand_id, brands)
     st.stop()
-
-platform = st.sidebar.selectbox(
-    "Platform",
-    ["All", "youtube", "tiktok", "instagram", "facebook"] # Keep "All" for platform filtering
-)
 
 # Load data only if we aren't on the Settings page (to avoid errors on empty brands)
 if page != "⚙️ Settings":
@@ -589,33 +589,36 @@ elif page == "📊 Insights":
     st.subheader("🔥 Audience Resonance Heatmap (Gold Standard)")
     st.write("Identify the exact intersections of time and day where your audience is most active.")
     
-    # Prepare data for Heatmap
-    df_heat = df_silver.copy()
-    df_heat['day_of_week'] = df_heat['published_at'].dt.day_name()
-    df_heat['hour'] = df_heat['published_at'].dt.hour
+    # Load pre-aggregated insights from the Gold layer for high-speed rendering
+    df_heat_gold = load_gold_insights(conn, org_id, brand_id, platform)
     
-    # Order days correctly
-    days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    
-    heatmap_data = df_heat.groupby(['day_of_week', 'hour'])['engagement_rate_pct'].mean().reset_index()
-    
-    # Pivot for Plotly
-    pivot_heat = heatmap_data.pivot(index='day_of_week', columns='hour', values='engagement_rate_pct').reindex(days_order)
+    if df_heat_gold.empty:
+        st.info("No gold-layer insights available for this selection. Try syncing data first.")
+    else:
+        # Order days correctly
+        days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        
+        # Pivot the pre-aggregated data (columns: day_of_week, hour_of_day, avg_engagement_rate)
+        pivot_heat = df_heat_gold.pivot(
+            index='day_of_week', 
+            columns='hour_of_day', 
+            values='avg_engagement_rate'
+        ).reindex(days_order)
 
-    fig_heat = go.Figure(data=go.Heatmap(
-        z=pivot_heat.values,
-        x=pivot_heat.columns,
-        y=pivot_heat.index,
-        colorscale='Viridis',
-        colorbar=dict(title='ER%')
-    ))
-    
-    fig_heat.update_layout(
-        xaxis_title="Hour of Day (UTC)",
-        yaxis_title="Day of Week",
-        height=400
-    )
-    st.plotly_chart(fig_heat, width='stretch')
+        fig_heat = go.Figure(data=go.Heatmap(
+            z=pivot_heat.values,
+            x=pivot_heat.columns,
+            y=pivot_heat.index,
+            colorscale='Viridis',
+            colorbar=dict(title='ER%')
+        ))
+        
+        fig_heat.update_layout(
+            xaxis_title="Hour of Day (UTC)",
+            yaxis_title="Day of Week",
+            height=400
+        )
+        st.plotly_chart(fig_heat, width='stretch')
 
 # =========================================================
 # ⚔️ COMPETITORS (Market Benchmarking)
@@ -985,7 +988,6 @@ elif page == "⚙️ Settings":
                             
                             ingest_map = {
                                 "youtube": youtube_ingestion.run,
-                                "facebook": facebook_ingestion.run,
                                 "facebook": facebook_scraper.run,
                                 "instagram": instagram_ingestion.run,
                                 "tiktok": tiktok_scraper_ingestion.run

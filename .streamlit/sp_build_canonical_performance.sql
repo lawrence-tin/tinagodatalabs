@@ -40,14 +40,18 @@ BEGIN
     MERGE INTO SILVER.CANONICAL_PERFORMANCE AS target
     USING (
         WITH deduplicated_bronze AS (
-            SELECT * 
+            SELECT *
             FROM BRONZE.RAW_SOCIAL_DATA
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY platform, platform_id ORDER BY ingested_at DESC) = 1
+            -- Ensure we partition by client and brand to prevent cross-tenant deduplication
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY platform, platform_id, client_id, brand_id 
+                ORDER BY ingested_at DESC
+            ) = 1
         )
         SELECT * FROM (
             -- YOUTUBE
             SELECT
-                raw_response:id::STRING AS content_id,
+                platform_id AS content_id,
                 'youtube' AS platform,
                 client_id, brand_id,
                 raw_response:snippet.title::STRING AS content_title,
@@ -81,7 +85,7 @@ BEGIN
 
             -- INSTAGRAM
             SELECT
-                raw_response:id::STRING, 'instagram', client_id, brand_id,
+                platform_id, 'instagram', client_id, brand_id,
                 raw_response:caption::STRING, raw_response:timestamp::TIMESTAMP_NTZ,
                 NULL, raw_response:media_type::STRING,
                 NULL, raw_response:like_count::INT, raw_response:comments_count::INT, 0, 0,
@@ -100,43 +104,68 @@ BEGIN
 
             -- FACEBOOK
             SELECT
-                raw_response:id::STRING, 'facebook', client_id, brand_id,
-                raw_response:message::STRING, raw_response:created_time::TIMESTAMP_NTZ,
-                NULL, 'post',
-                NULL, raw_response:likes.summary.total_count::INT, raw_response:comments.summary.total_count::INT,
-                raw_response:shares.count::INT, 0,
-                raw_response:likes.summary.total_count::INT,
-                (raw_response:likes.summary.total_count::INT + raw_response:comments.summary.total_count::INT + raw_response:shares.count::INT),
-                CASE WHEN raw_response:likes.summary.total_count::INT > 0 
-                     THEN ((raw_response:likes.summary.total_count::INT + raw_response:comments.summary.total_count::INT + raw_response:shares.count::INT) / raw_response:likes.summary.total_count::INT) * 100
-                     ELSE 0 END,
-                NULL, LENGTH(raw_response:message::STRING), raw_response:message::STRING LIKE '%#%',
-                REGEXP_COUNT(raw_response:message::STRING, '#'), REGEXP_LIKE(raw_response:message::STRING, '[😀-🙏]'),
-                REGEXP_COUNT(raw_response:message::STRING, '@'),
-                (EXTRACT(DOW FROM raw_response:created_time::TIMESTAMP_NTZ) IN (0, 6)),
-                TRUE, CURRENT_TIMESTAMP(), 'v1'
+                platform_id AS content_id,
+                'facebook' AS platform,
+                client_id, brand_id,
+                COALESCE(raw_response:text::STRING, raw_response:message::STRING) AS content_title,
+                COALESCE(raw_response:time::TIMESTAMP_NTZ, raw_response:created_time::TIMESTAMP_NTZ) AS published_at,
+                CASE 
+                    WHEN raw_response:isVideo::BOOLEAN = TRUE THEN (raw_response:media[0].playable_duration_in_ms::INT / 1000)
+                    WHEN raw_response:is_video::BOOLEAN = TRUE THEN raw_response:length::INT
+                    ELSE NULL 
+                END AS duration_seconds,
+                CASE WHEN COALESCE(raw_response:isVideo::BOOLEAN, raw_response:is_video::BOOLEAN) = TRUE THEN 'video' ELSE 'post' END AS content_type,
+                COALESCE(raw_response:viewsCount::INT, raw_response:video_views::INT, 0) AS raw_views,
+                COALESCE(raw_response:likes::INT, raw_response:reactionCount::INT, raw_response:like_count::INT, 0) AS raw_likes,
+                COALESCE(raw_response:comments::INT, raw_response:commentCount::INT, raw_response:comments_count::INT, 0) AS raw_comments,
+                COALESCE(raw_response:shares::INT, raw_response:share_count::INT, 0) AS raw_shares,
+                0 AS raw_saves,
+                COALESCE(raw_response:viewsCount::INT, raw_response:video_views::INT, raw_response:likes::INT, 0) AS total_reach,
+                (COALESCE(raw_likes, 0) + COALESCE(raw_comments, 0) + COALESCE(raw_shares, 0)) AS total_engagement,
+                CASE 
+                    WHEN COALESCE(total_reach, 0) > 0 THEN (total_engagement / total_reach) * 100 
+                    ELSE 0 
+                END AS engagement_rate_pct,
+                NULL AS sentiment_score,
+                LENGTH(content_title) AS title_length,
+                content_title LIKE '%#%' AS has_hashtags,
+                REGEXP_COUNT(content_title, '#') AS hashtag_count,
+                REGEXP_LIKE(content_title, '[^\\x00-\\x7F]') AS has_emojis,
+                REGEXP_COUNT(content_title, '@') AS mention_count,
+                (EXTRACT(DOW FROM published_at) IN (0, 6)) AS is_weekend,
+                TRUE AS is_active, CURRENT_TIMESTAMP() AS processed_at, 'v2' AS version
             FROM deduplicated_bronze WHERE platform = 'facebook'
 
             UNION ALL
 
             -- TIKTOK (Optimized for Apify Scraper)
             SELECT
-                raw_response:id::STRING, 'tiktok', client_id, brand_id,
+                platform_id AS content_id,
+                'tiktok' AS platform,
+                client_id, brand_id,
                 raw_response:desc::STRING, 
                 TO_TIMESTAMP_NTZ(raw_response:createTime::INT) AS published_at,
                 COALESCE(raw_response:videoMeta.duration::INT, 0) AS duration_seconds,
                 'video' AS content_type,
-                raw_response:stats.playCount::INT, raw_response:stats.diggCount::INT, raw_response:stats.commentCount::INT, raw_response:stats.shareCount::INT, 0,
-                raw_response:stats.playCount::INT,
-                (raw_response:stats.diggCount::INT + raw_response:stats.commentCount::INT + raw_response:stats.shareCount::INT),
-                CASE WHEN raw_response:stats.playCount::INT > 0 
-                     THEN ((raw_response:stats.diggCount::INT + raw_response:stats:commentCount::INT + raw_response:stats.shareCount::INT) / raw_response:stats.playCount::INT) * 100
-                     ELSE 0 END,
-                NULL, LENGTH(raw_response:desc::STRING), raw_response:desc::STRING LIKE '%#%',
-                REGEXP_COUNT(raw_response:desc::STRING, '#'), REGEXP_LIKE(raw_response:desc::STRING, '[😀-🙏]'),
-                REGEXP_COUNT(raw_response:desc::STRING, '@'),
-                (EXTRACT(DOW FROM TO_TIMESTAMP_NTZ(raw_response:createTime::INT)) IN (0, 6)) AS is_weekend,
-                TRUE AS is_active, CURRENT_TIMESTAMP() AS processed_at, 'v1' AS version
+                raw_response:stats.playCount::INT AS raw_views,
+                raw_response:stats.diggCount::INT AS raw_likes,
+                raw_response:stats.commentCount::INT AS raw_comments,
+                raw_response:stats.shareCount::INT AS raw_shares,
+                0 AS raw_saves,
+                raw_views AS total_reach,
+                (COALESCE(raw_likes, 0) + COALESCE(raw_comments, 0) + COALESCE(raw_shares, 0)) AS total_engagement,
+                CASE 
+                    WHEN raw_views > 0 THEN (total_engagement / raw_views) * 100 
+                    ELSE 0 
+                END AS engagement_rate_pct,
+                NULL AS sentiment_score,
+                LENGTH(raw_response:desc::STRING) AS title_length,
+                raw_response:desc::STRING LIKE '%#%' AS has_hashtags,
+                REGEXP_COUNT(raw_response:desc::STRING, '#') AS hashtag_count,
+                REGEXP_LIKE(raw_response:desc::STRING, '[^\\x00-\\x7F]') AS has_emojis,
+                REGEXP_COUNT(raw_response:desc::STRING, '@') AS mention_count,
+                (EXTRACT(DOW FROM published_at) IN (0, 6)) AS is_weekend,
+                TRUE AS is_active, CURRENT_TIMESTAMP() AS processed_at, 'v2' AS version
             FROM deduplicated_bronze WHERE platform = 'tiktok'
         )
     ) AS source

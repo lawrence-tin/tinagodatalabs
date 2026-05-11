@@ -359,14 +359,50 @@ def load_silver_data(conn, organization_id=None, brand_id=None, platform=None):
 # -----------------------------
 # GOLD DATA (optional future use)
 # -----------------------------
-def load_gold_data(conn):
-    query = """
-        SELECT *
-        FROM TEAM5PM_PRODUCT.GOLD.AI_TRAINING_DATASET
+def load_gold_insights(conn, organization_id, brand_id, platform):
     """
+    Loads pre-calculated time and day insights from the Gold layer.
+    Used for high-speed rendering of Heatmaps and Strategy charts.
+    """
+    # Aggregate brand/platform level insights to support "All" selections in UI
+    query = """
+        SELECT 
+            day_of_week, 
+            hour_of_day, 
+            AVG(avg_engagement_rate) as avg_engagement_rate
+        FROM TEAM5PM_PRODUCT.GOLD.BRAND_TIME_INSIGHTS
+        WHERE client_id = %s
+    """
+    params = [organization_id]
+
+    if brand_id and brand_id != "All":
+        query += " AND brand_id = %s"
+        params.append(brand_id)
+
+    if platform and platform != "All":
+        query += " AND platform = %s"
+        params.append(platform)
+
+    query += " GROUP BY day_of_week, hour_of_day"
 
     cursor = conn.cursor()
-    cursor.execute(query)
+    cursor.execute(query, params)
+    df = pd.DataFrame(cursor.fetchall(), columns=[col[0] for col in cursor.description])
+    df.columns = df.columns.str.lower()
+    return df
+
+def load_gold_training_data(conn, brand_id=None):
+    """
+    Loads the flattened training dataset with pre-calculated rolling averages.
+    """
+    query = "SELECT * FROM TEAM5PM_PRODUCT.GOLD.AI_TRAINING_DATASET"
+    params = []
+    if brand_id:
+        query += " WHERE brand_id = %s"
+        params.append(brand_id)
+
+    cursor = conn.cursor()
+    cursor.execute(query, params)
     df = pd.DataFrame(cursor.fetchall(), columns=[col[0] for col in cursor.description])
     df.columns = df.columns.str.lower()
 
