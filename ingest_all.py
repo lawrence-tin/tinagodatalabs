@@ -27,11 +27,12 @@ def main():
         print("🧪 RUNNING IN DRY-RUN MODE: Snowflake upload will be skipped.")
 
     # 2. Import platform modules AFTER environment is setup
-    from ingestion import youtube_ingestion, facebook_ingestion, instagram_ingestion, tiktok_scraper_ingestion, process_silver
+    from ingestion import youtube_ingestion, facebook_ingestion, instagram_ingestion, tiktok_scraper_ingestion, process_silver, process_gold
+    import facebook_scraper
 
     ingestors = {
         "youtube": youtube_ingestion.run,
-        "facebook": facebook_ingestion.run,
+        "facebook": facebook_scraper.run,
         "instagram": instagram_ingestion.run,
         "tiktok": tiktok_scraper_ingestion.run,
     }
@@ -50,6 +51,10 @@ def main():
     # 3. Automatically trigger Silver transformation to update the dashboard tables
     print("\n🏗️  Starting Silver Layer transformation...")
     process_silver.run_silver_transformation()
+
+    # 4. Automatically trigger Gold Layer pre-aggregations
+    print("\n💎 Updating Gold Layer insights...")
+    process_gold.run_gold_transformation()
 
 if __name__ == "__main__":
     try:
