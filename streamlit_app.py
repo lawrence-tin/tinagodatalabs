@@ -11,7 +11,7 @@ import pandas as pd
 import io
 from datetime import datetime
 import plotly.graph_objects as go
-from utils.data_loader import get_connection, load_silver_data, authenticate_user, register_user, fetch_user_clients, create_client, save_platform_credentials, fetch_brands, create_brand, fetch_platform_connections, fetch_brand_stats, fetch_org_platform_keys, delete_platform_connection, update_platform_credentials, load_gold_insights
+from utils.data_loader import get_connection, load_silver_data, authenticate_user, register_user, fetch_user_clients, create_client, save_platform_credentials, fetch_brands, create_brand, fetch_platform_connections, fetch_brand_stats, fetch_org_platform_keys, delete_platform_connection, update_platform_credentials, load_gold_insights, fetch_user_by_id
 from core.model_loader import load_model, get_model_status
 from utils.optimizer import run_optimization
 from utils.features import build_features, extract_title_features
@@ -45,6 +45,12 @@ conn = get_connection()
 # ---------------------------
 # AUTHENTICATION
 # ---------------------------
+# Try to restore session from URL if session_state was cleared (e.g., on refresh)
+if "user" not in st.session_state and "uid" in st.query_params:
+    persisted_user = fetch_user_by_id(conn, st.query_params["uid"])
+    if persisted_user:
+        st.session_state["user"] = persisted_user
+
 if "user" not in st.session_state:
     auth_mode = st.sidebar.radio("Welcome", ["Login", "Sign Up"])
     email = st.sidebar.text_input("Email")
@@ -55,6 +61,7 @@ if "user" not in st.session_state:
             user = authenticate_user(conn, email, password)
             if user:
                 st.session_state["user"] = user
+                st.query_params["uid"] = user["user_id"] # Persist for refreshes
                 st.rerun()
             else:
                 st.sidebar.error("Invalid credentials")
@@ -77,6 +84,7 @@ user_email = st.session_state["user"]["email"]
 st.sidebar.write(f"Logged in as: {user_email}")
 if st.sidebar.button("Logout"):
     del st.session_state["user"]
+    st.query_params.clear() # Clear persistent session
     st.rerun()
 
 

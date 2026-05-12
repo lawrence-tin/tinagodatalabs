@@ -70,6 +70,25 @@ def authenticate_user(conn, email, password):
         st.error(f"Authentication error: {e}")
         return None
 
+def fetch_user_by_id(conn, user_id):
+    """
+    Fetches user details by user_id. Used to restore sessions from URL parameters.
+    """
+    query = """
+        SELECT user_id, email
+        FROM TEAM5PM_PRODUCT.CONFIG.USERS
+        WHERE user_id = %s
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return {"user_id": row[0], "email": row[1]}
+        return None
+    except Exception as e:
+        return None
+
 def register_user(conn, email, password):
     """
     Registers a new user by hashing their password and inserting into CONFIG.USERS.
